@@ -1,0 +1,31 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "general": {
+      "model": "opencode-go/deepseek-v4-flash",
+      "variant": "high"
+    },
+    "explore": {
+      "model": "opencode/north-mini-code-free",
+      "variant": "high"
+    }
+  },
+  "mcp": {
+    "playwright": {
+      "type": "local",
+      "command": [
+        "cmd",
+        "/c",
+        "npx",
+        "-y",
+        "@playwright/mcp@latest",
+        "--user-data-dir",
+        "C:\\Users\\mrkoo\\.config\\opencode\\playwright-profile"
+      ],
+      "enabled": true,
+      "env": {
+        "PLAYWRIGHT_MCP_HEADLESS": "false"
+      }
+    }
+  }
+}
