@@ -12,4 +12,7 @@
     <RootNamespace>BotDs.Reader</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="BotDs.Tests" />
+  </ItemGroup>
 </Project>

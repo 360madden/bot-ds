@@ -243,10 +243,19 @@ public sealed class StableReader
             readBufferA(localA);
             readBufferB(localB);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (ReaderException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _consecutiveFaults++;
-            return StableReadResult.Disconnected($"Buffer read failed: {ex.Message}");
+            return StableReadResult.Disconnected(
+                $"Buffer read failed: {ReaderDiagnosticSanitizer.Sanitize(ex.Message)}");
         }
 
         // 2. Validate CRC on each buffer
@@ -261,8 +270,8 @@ public sealed class StableReader
         }
 
         // 3. Parse both CRC-valid candidates before selection.
-        ParsedV5Frame? frameA = ParseCandidate(localA, aValid, 0, out string failureA);
-        ParsedV5Frame? frameB = ParseCandidate(localB, bValid, 1, out string failureB);
+        ParsedV5Frame? frameA = V5FrameValidator.ParseValidFrame(localA, 0, out string failureA);
+        ParsedV5Frame? frameB = V5FrameValidator.ParseValidFrame(localB, 1, out string failureB);
 
         if (frameA is null && frameB is null)
         {
@@ -270,44 +279,36 @@ public sealed class StableReader
             return StableReadResult.Faulted($"No valid frame. Buffer A: {failureA}; Buffer B: {failureB}");
         }
 
-        // 4. Sequence numbers are comparable only within one session using
-        // wrap-aware ordering (IETF RFC 1982 serial-number arithmetic).
-        // Across sessions, producer frame time is compared with uint wrap semantics.
-        ParsedV5Frame frame;
-        if (frameA is not null && frameB is not null)
+        // 4. Select the newer frame using the stateless V5FrameSelector,
+        // which applies same-session wrap-aware sequence ordering or
+        // cross-session producer-frame-time comparison.
+        V5SelectionResult selection = BotDs.Reader.V5FrameSelector.Select(frameA, frameB, out ParsedV5Frame? selectedFrame);
+        if (selection == V5SelectionResult.Ambiguous)
         {
-            if (frameA.Provider!.SessionId == frameB.Provider!.SessionId)
+            _consecutiveFaults++;
+            if (frameA is not null && frameB is not null
+                && frameA.Provider is not null && frameB.Provider is not null)
             {
-                uint seqA = frameA.Header.Sequence;
-                uint seqB = frameB.Header.Sequence;
-                if (SessionTracker.IsAmbiguous(seqB, seqA))
+                if (frameA.Provider.SessionId == frameB.Provider.SessionId)
                 {
-                    _consecutiveFaults++;
                     return StableReadResult.Faulted(
-                        $"Ambiguous same-session sequence ordering: seqA={seqA}, seqB={seqB}");
+                        $"Ambiguous same-session sequence ordering: seqA={frameA.Header.Sequence}, seqB={frameB.Header.Sequence}");
                 }
-                frame = SessionTracker.IsAfter(seqB, seqA) ? frameB : frameA;
-            }
-            else
-            {
-                int producerTimeOrder = CompareProducerFrameTime(
-                    frameA.Header.ProducerFrameMs,
-                    frameB.Header.ProducerFrameMs);
-                if (producerTimeOrder == 0)
+                else
                 {
-                    _consecutiveFaults++;
                     return StableReadResult.Faulted(
                         $"Ambiguous sessions: buffer A session {frameA.Provider.SessionId:D} at producer frame {frameA.Header.ProducerFrameMs}; " +
                         $"buffer B session {frameB.Provider.SessionId:D} at producer frame {frameB.Header.ProducerFrameMs}");
                 }
-
-                frame = producerTimeOrder > 0 ? frameA : frameB;
             }
+            return StableReadResult.Faulted("Ambiguous frame ordering");
         }
-        else
+        if (selection == V5SelectionResult.NoneValid || selectedFrame is null)
         {
-            frame = frameA ?? frameB!;
+            _consecutiveFaults++;
+            return StableReadResult.Faulted("No valid frame could be selected from buffers");
         }
+        ParsedV5Frame frame = selectedFrame;
 
         // 5. Evaluate continuity before freshness so a new session may reset sequence.
         ContinuityResult continuity = _sessionTracker.Evaluate(frame, out uint gapSize);
@@ -368,47 +369,10 @@ public sealed class StableReader
         Array.Clear(_bufferB);
     }
 
-    private static ParsedV5Frame? ParseCandidate(
-        ReadOnlySpan<byte> buffer,
-        bool crcValid,
-        int bufferIndex,
-        out string failure)
-    {
-        if (!crcValid)
-        {
-            failure = "CRC mismatch";
-            return null;
-        }
-
-        V5ParseResult result = V5Parser.Parse(buffer, bufferIndex);
-        if (!result.IsValid)
-        {
-            failure = $"{result.Failure} — {result.FailureDetail}";
-            return null;
-        }
-
-        if (result.Frame?.Provider is null)
-        {
-            failure = "ProviderInfo section is required";
-            return null;
-        }
-
-        failure = string.Empty;
-        return result.Frame;
-    }
-
-    private static int CompareProducerFrameTime(uint a, uint b)
-    {
-        uint difference = unchecked(a - b);
-        if (difference is 0 or 0x80000000)
-            return 0;
-
-        return difference < 0x80000000 ? 1 : -1;
-    }
-
     /// <summary>
     /// Whether the session tracker is currently in a fault-degraded state
     /// (sequence decrement, replay, or ambiguous ordering).
     /// </summary>
     public bool IsSessionDegraded => _sessionTracker.IsDegraded;
+
 }
