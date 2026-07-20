@@ -1,0 +1,9 @@
+Identifier = "BotDsConformance"
+Name = "BotDs M1 Conformance Probe"
+Description = "Non-actuating API surface probe for M1 field/event matrix"
+Author = "BotDs"
+Version = "0.1.0"
+Email = ""
+RunOnStartup = {
+    "main.lua"
+}

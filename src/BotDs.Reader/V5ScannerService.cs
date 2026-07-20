@@ -68,6 +68,12 @@ public sealed class V5ScannerService : IDisposable
     private long _lastStaleTimestamp;
     private static readonly TimeSpan StaleBackoffInterval = TimeSpan.FromSeconds(5);
 
+    // Small-window rescan: search ±2 MB around the cached address before falling
+    // back to full scan. This matches the Reader reference tool's tier-2 strategy.
+    private const long SmallWindowSize = 2 * 1024 * 1024; // ±2 MB
+    private long _smallWindowHits;
+    private long _smallWindowMisses;
+
     public V5ScannerService(ProcessSelector selector, TimeSpan localMaxAge,
         SentinelScannerOptions? scannerOptions = null, IMemoryReaderFactory? readerFactory = null,
         TimeProvider? timeProvider = null)
@@ -84,6 +90,8 @@ public sealed class V5ScannerService : IDisposable
     public int AttachmentPid => Volatile.Read(ref _attachPid);
     public long AttachmentGeneration => Volatile.Read(ref _attachGen);
     public ScannerMetrics Metrics { get { try { _gate.Wait(); return _metrics; } finally { _gate.Release(); } } }
+    public long SmallWindowHits => Volatile.Read(ref _smallWindowHits);
+    public long SmallWindowMisses => Volatile.Read(ref _smallWindowMisses);
 
     public ScannerReadResult Read(CancellationToken ct = default)
     {
@@ -104,6 +112,7 @@ public sealed class V5ScannerService : IDisposable
 
                 V5Candidate? cand = null;
                 bool usedCache = false;
+                nint lastKnownAddr = _cachedAddr; // saved before cache validation may clear it
 
                 if (_hasCached)
                 {
@@ -115,6 +124,29 @@ public sealed class V5ScannerService : IDisposable
                 if (cand is null)
                 {
                     d.CacheMiss = 1;
+
+                    // Tier 2: small-window rescan around last known address
+                    if (lastKnownAddr != 0)
+                    {
+                        V5Candidate? windowCandidate = TrySmallWindowRescan(_reader, lastKnownAddr, ct);
+                        if (windowCandidate is not null)
+                        {
+                            _smallWindowHits++;
+                            d.WindowHits = 1;
+                            cand = windowCandidate;
+                            d.CacheMiss = 0;
+                        }
+                        else
+                        {
+                            _smallWindowMisses++;
+                            d.WindowMisses = 1;
+                        }
+                    }
+                }
+
+                if (cand is null)
+                {
+                    // Tier 3: full-memory scan
                     var sr = V5SentinelScanner.Scan(_reader, _scannerOpts, ct);
                     d.FullScan = 1; d.Regions = sr.TotalRegions; d.Eligible = sr.TotalRegions;
                     d.Bytes = sr.BytesScanned; d.RawMatch = sr.RawMagicMatches; d.ExactSent = sr.ExactSentinelMatches;
@@ -260,6 +292,52 @@ public sealed class V5ScannerService : IDisposable
             _timeProvider.GetUtcNow());
     }
 
+    /// <summary>
+    /// Tier-2 small-window rescan: read chunks of the ±SmallWindowSize range
+    /// around the last known address and scan for the sentinel magic directly.
+    /// Avoids full region enumeration for speed.
+    /// </summary>
+    private static V5Candidate? TrySmallWindowRescan(
+        IMemoryReader reader, nint cachedAddr, CancellationToken ct)
+    {
+        const int chunkSize = 64 * 1024; // 64 KB chunks
+        long windowBase = Math.Max(0, cachedAddr.ToInt64() - SmallWindowSize);
+        long windowEnd = Math.Min(cachedAddr.ToInt64() + SmallWindowSize, long.MaxValue - chunkSize);
+        byte[] chunk = new byte[chunkSize];
+
+        for (long addr = windowBase; addr < windowEnd; addr += chunkSize)
+        {
+            ct.ThrowIfCancellationRequested();
+            int readSize = (int)Math.Min(chunkSize, windowEnd - addr);
+
+            try
+            {
+                reader.ReadExact((nint)addr, chunk, readSize);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch
+            {
+                // Page not readable — skip to next chunk
+                continue;
+            }
+
+            // Scan chunk for sentinel magic
+            for (int i = 0; i <= readSize - V5Constants.SentinelMagicLength; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (chunk.AsSpan(i, V5Constants.SentinelMagicLength).SequenceEqual(V5Constants.SentinelMagic))
+                {
+                    nint candidateAddr = (nint)(addr + i);
+                    var candidate = V5SentinelScanner.ValidateCandidate(reader, candidateAddr, ct);
+                    if (candidate is not null)
+                        return candidate;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private ScannerReadResult Fail(MetricDeltas d, ProviderHealth h, ReaderFailureCode c, string detail, long t0)
     { d.ReadCycleFails = 1; _metrics = Apply(d, t0); return ScannerReadResult.Failure(h, c, Sanitize(detail), _attachPid, _attachGen, _metrics); }
 
@@ -289,14 +367,16 @@ public sealed class V5ScannerService : IDisposable
         rawMagicMatchesDelta: d.RawMatch, exactSentinelMatchesDelta: d.ExactSent,
         validCandidatesDelta: d.Candidates, candidateLimitHitsDelta: d.CandidateLimit,
         readFailuresDelta: d.ReadFails, scanDurationDelta: d.ScanDur,
-        readDurationDelta: _timeProvider.GetElapsedTime(t0), readCycleFailuresDelta: d.ReadCycleFails,
-        lastScanUtc: d.FullScan > 0 ? _timeProvider.GetUtcNow().UtcDateTime : _metrics.LastScanUtc,
+        readDurationDelta: _timeProvider.GetElapsedTime(t0), readCycleFailuresDelta: d.ReadCycleFails,            smallWindowHitsDelta: d.WindowHits,
+            smallWindowMissesDelta: d.WindowMisses,
+            lastScanUtc: d.FullScan > 0 ? _timeProvider.GetUtcNow().UtcDateTime : _metrics.LastScanUtc,
         lastReadCycleUtc: _timeProvider.GetUtcNow().UtcDateTime);
 
     private struct MetricDeltas
     {
         public long FullScan, CacheHit, CacheMiss, Regions, Eligible, Bytes;
         public long RawMatch, ExactSent, Candidates, CandidateLimit, ReadFails, ReadCycleFails;
+        public long WindowHits, WindowMisses;
         public TimeSpan ScanDur;
     }
 

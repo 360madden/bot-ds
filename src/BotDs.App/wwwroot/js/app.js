@@ -77,6 +77,16 @@
   const providerFaultRow = $("provider-fault-row");
   const providerFault = $("provider-fault");
 
+  // Scanner
+  const scannerSection = $("scanner-section");
+  const scannerPid = $("scanner-pid");
+  const scannerStatus = $("scanner-status");
+  const scannerCacheHits = $("scanner-cache-hits");
+  const scannerCacheMisses = $("scanner-cache-misses");
+  const scannerFullScans = $("scanner-full-scans");
+  const scannerReadCycles = $("scanner-read-cycles");
+  const scannerReadFails = $("scanner-read-fails");
+
   // Controller
   const controllerState = $("controller-state");
   const controllerStop = $("controller-stop");
@@ -333,6 +343,23 @@
       setText(providerFault, provider.fault);
     } else {
       setHidden(providerFaultRow, true);
+    }
+
+    // Scanner metrics
+    if (status.scanner) {
+      setHidden(scannerSection, false);
+      setText(scannerPid, status.scanner.isAttached ? String(status.scanner.attachmentPid) : "—");
+      setStatusBadge(scannerStatus, status.scanner.lastResultHealth || "Disconnected");
+      var m = status.scanner.metrics || {};
+      setText(scannerCacheHits, formatSeq(m.cacheHitCount));
+      setText(scannerCacheMisses, formatSeq(m.cacheMissCount));
+      setText(scannerFullScans, formatSeq(m.fullScanCount));
+      setText(scannerReadCycles, formatSeq(m.readCycleFailures != null
+        ? (m.cacheHitCount || 0) + (m.cacheMissCount || 0) + (m.readCycleFailures || 0)
+        : null));
+      setText(scannerReadFails, formatSeq(m.readFailures));
+    } else {
+      setHidden(scannerSection, true);
     }
 
     // Controller

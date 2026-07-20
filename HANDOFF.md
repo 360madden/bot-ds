@@ -185,11 +185,61 @@ Launch independent work concurrently with strict path ownership:
 | `core-worker` | Core review/fixes plus `profiles/**` and `schemas/**` when explicitly assigned |
 | `simple-worker` | Mechanical edits and established-pattern changes under explicitly assigned paths |
 
-Do not let concurrent agents edit the same project file. Let the primary agent perform package/project-file changes. After workers finish, use `integrator` for the full build and `reviewer` for findings-only final review.
+Do not let concurrent agents edit the same project file. Let the primary agent perform package/project-file changes. After workers finish, use `integrator` for the full build and `reviewer` for findings-only final review.## M1 Transport Gate Findings (2026-07-20)
+
+### V5 Process Memory Transport: VIABLE ✅
+
+The 360madden/Reader tool (`https://github.com/360madden/Reader`) uses the same sentinel-based memory scanning architecture with a ~95% cache hit rate. Our V5 scanner already implements cache-hit + full-scan (small-window rescan is a future optimization). **No architectural changes needed.**
+
+Despite Lua strings being immutable and the addon rebuilding the buffer on every frame, addresses tend to remain stable because:
+- GC runs incrementally, not every frame
+- Allocator reuses recently-freed same-size slots
+- Fixed 16,400-byte allocation is predictable
+- No competing large allocations in the addon
+
+### SavedVariables as Scaffolding
+- Flush only on `/reloadui` or client exit (NOT periodic)
+- File path: `%USERPROFILE%\Documents\RIFT\SavedVariables\[Account]\[Shard]\[Char]\BotDsBridge.lua`
+- Useful for: debug payload inspection, API surface exploration, config persistence
+- Not suitable for real-time telemetry
+
+### RIFT Environment Facts
+| Fact | Detail |
+|------|--------|
+| Process names | `rift.exe`, `rift_x64.exe` |
+| Lua runtime | Standard Lua (NOT LuaJIT), sandboxed |
+| `print()` output | In-game console only (NOT client log) |
+| `collectgarbage()` | Restricted in sandbox |
+| Chat focus detection | `UI.Textfield.Focus(nil)` or `Event.UI.Focus.Gain/Lose` |
+| Secure mode | `Inspect.System.Secure()` returns boolean; poll via Update.Begin |
+| Combat events | `Event.Combat.Damage/Death/Dodge/Healing/Miss/Parry/Resist` with caster/target/ability/amount |
+
+### Action-Bar Mapping
+- `Action.Get(slot)` returns ability placement — **observable**
+- `Action.Bar.Page.Get()` returns current page — **observable**
+- Key bindings to slots — **NOT observable**
+- Conclusion: bindings must be user-configured in profiles, verified via controlled calibration
+
+### M1 Artifacts Created
+| Artifact | Path |
+|----------|------|
+| Conformance probe addon | `addons/BotDsConformance/` |
+| Field/event matrix (awaiting live data) | `docs/m1-field-event-matrix.md` |
+| Stable storage finding | `docs/m1-stable-storage-finding.md` |
+| Populated live addon (game-state sections) | `addons/BotDsBridge/BotDsBridge/main.lua` |
+| Hosted scanner loop | `src/BotDs.App/Services/TelemetryReaderLoop.cs` |
+| Scanner dashboard card | `src/BotDs.App/wwwroot/index.html` + `js/app.js` |
 
 ## Remaining Implementation
-
 The authoritative sequence and exit criteria are in `ROADMAP.md`. The active milestone is M1: transport and current-client conformance.
+
+**M1 status: Transport decided (V5 process memory). Remaining M1 work:**
+1. Run populated addon + V5 scanner against live RIFT client
+2. Verify sentinel discovery, parse live frames, confirm cache hit rate
+3. Populate field/event matrix from live conformance probe data
+4. Measure actual payload sizes, ability/aura counts, update cadence
+5. Run 30-min 20 Hz soak test
+6. Freeze production protocol contract and update PLAN.md/ROADMAP.md
 
 ## Inputs Still Needed
 

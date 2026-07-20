@@ -370,9 +370,8 @@ local function encode_provider_info()
     local producerFrameMs = math.floor((Inspect.Time.Frame() or 0) * 1000)
 
     local clientVersion = ""
-    -- TODO: Inspect.System.Version() returns client build info
-    -- local ver = Inspect.System.Version()
-    -- if ver then clientVersion = ver .. "" end
+    local ok, ver = pcall(Inspect.System.Version)
+    if ok and ver then clientVersion = tostring(ver) end
 
     local pos = 1
     -- SessionId: 16 bytes
@@ -438,37 +437,49 @@ local function encode_unit_state(unitSpecifier)
     local castDur = -1
     local castFlags = 0
 
-    -- TODO: Use Inspect.Unit.Detail(unitSpecifier) to populate fields
-    -- local detail = Inspect.Unit.Detail(unitSpecifier)
-    -- if detail then
-    --     avail = true
-    --     flags = V5Constants.UnitFlagIsAvailable
-    --     id = tostring(detail.id or "")
-    --     name = detail.name or ""
-    --     level = detail.level or -1
-    --     if detail.player then flags = flags | V5Constants.UnitFlagIsPlayer end
-    --     if detail.combat then flags = flags | V5Constants.UnitFlagInCombat end
-    --     if detail.relation == "hostile" then relation = 1
-    --     elseif detail.relation == "friendly" then relation = 2
-    --     elseif detail.relation == "neutral" then relation = 3 end
-    --     healthCur = detail.health or -1
-    --     healthMax = detail.healthMax or -1
-    --     -- Resource: pick first non-nil power type
-    --     if detail.mana then resCur = detail.mana; resKind = "mana"
-    --     elseif detail.energy then resCur = detail.energy; resKind = "energy"
-    --     elseif detail.power then resCur = detail.power; resKind = "power"
-    --     elseif detail.charge then resCur = detail.charge; resKind = "charge" end
-    --     -- Castbar
-    --     local castbar = Inspect.Unit.Castbar(unitSpecifier)
-    --     if castbar then
-    --         castId = tostring(castbar.abilityId or "")
-    --         castName = castbar.name or ""
-    --         castRemain = castbar.remaining or -1
-    --         castDur = castbar.duration or -1
-    --         if castbar.channel then castFlags = castFlags | V5Constants.CastFlagIsChannel end
-    --         if castbar.uninterruptible then castFlags = castFlags | V5Constants.CastFlagIsUninterruptible end
-    --     end
-    -- end
+    local ok, detail = pcall(Inspect.Unit.Detail, unitSpecifier)
+    if ok and detail then
+        avail = true
+        flags = 0x04 -- UnitFlagIsAvailable
+        id = tostring(detail.id or "")
+        name = detail.name or ""
+        level = detail.level or -1
+        if detail.calling then calling = tostring(detail.calling) end
+        if detail.player then
+            flags = bor(flags, 0x01) -- UnitFlagIsPlayer
+            if detail.pvp then flags = bor(flags, 0x08) end
+        end
+        if detail.combat then flags = bor(flags, 0x02) end -- UnitFlagInCombat
+        if detail.relation == "hostile" then relation = 1
+        elseif detail.relation == "friendly" then relation = 2
+        elseif detail.relation == "neutral" then relation = 3 end
+        healthCur = detail.health or -1
+        healthMax = detail.healthMax or -1
+        -- Resource: pick first non-nil power type (even zero values)
+        if detail.mana ~= nil then
+            resCur = detail.mana; resKind = "mana"
+        elseif detail.energy ~= nil then
+            resCur = detail.energy; resKind = "energy"
+        elseif detail.power ~= nil then
+            resCur = detail.power; resKind = "power"
+        elseif detail.charge ~= nil then
+            resCur = detail.charge; resKind = "charge"
+        end
+        if detail.manaMax ~= nil then resMax = detail.manaMax
+        elseif detail.energyMax ~= nil then resMax = detail.energyMax
+        elseif detail.powerMax ~= nil then resMax = detail.powerMax
+        elseif detail.chargeMax ~= nil then resMax = detail.chargeMax end
+        -- Castbar
+        local cok, castbar = pcall(Inspect.Unit.Castbar, unitSpecifier)
+        if cok and castbar then
+            castId = tostring(castbar.abilityId or "")
+            castName = castbar.name or ""
+            castRemain = castbar.remaining or -1
+            castDur = castbar.duration or -1
+            if castbar.channel then castFlags = bor(castFlags, 0x01) end -- CastFlagIsChannel
+            if castbar.uninterruptible then castFlags = bor(castFlags, 0x02) end -- CastFlagIsUninterruptible
+        end
+    end
 
     -- Id
     local pos
@@ -539,38 +550,43 @@ local function encode_abilities()
     local isKnown = false
     local records = ""
 
-    -- TODO: Use Inspect.Ability.New.List() and Inspect.Ability.New.Detail()
-    -- local ids = Inspect.Ability.New.List()
-    -- if ids then
-    --     local complete = true
-    --     for _, abilityId in ipairs(ids) do
-    --         if count >= 128 then
-    --             complete = false
-    --             break
-    --         end
-    --         local detail = Inspect.Ability.New.Detail(abilityId)
-    --         if detail then
-    --             local rec = string.rep("\0", 46)
-    --             rec = write_fixed_ascii(rec, 1, tostring(detail.id or abilityId), 32)
-    --             rec = write_i32_le(rec, 33, detail.currentCooldownRemaining or -1)
-    --             rec = write_i32_le(rec, 37, detail.currentCooldownDuration or -1)
-    --             rec = write_i32_le(rec, 41, detail.castingTime or -1)
-    --             local aFlags = 0
-    --             if not detail.unusable then aFlags = aFlags | 0x01 end -- available
-    --             if detail.usable then aFlags = aFlags | 0x02 end
-    --             if not detail.outOfRange then aFlags = aFlags | 0x04 end
-    --             if detail.passive then aFlags = aFlags | 0x08 end
-    --             if detail.channeled then aFlags = aFlags | 0x10 end
-    --             rec = write_u8(rec, 45, aFlags)
-    --             rec = write_u8(rec, 46, 0) -- resource cost (simplified)
-    --             records = records .. rec
-    --             count = count + 1
-    --         else
-    --             complete = false
-    --         end
-    --     end
-    --     isKnown = complete
-    -- end
+    local ok, ids = pcall(Inspect.Ability.New.List)
+    if ok and ids then
+        local complete = true
+        for _, abilityId in ipairs(ids) do
+            if count >= 128 then
+                complete = false
+                break
+            end
+            local dok, detail = pcall(Inspect.Ability.New.Detail, abilityId)
+            if dok and detail then
+                local rec = string.rep("\0", 46)
+                rec = write_fixed_ascii(rec, 1, tostring(detail.id or abilityId), 32)
+                rec = write_i32_le(rec, 33, detail.currentCooldownRemaining or -1)
+                rec = write_i32_le(rec, 37, detail.currentCooldownDuration or -1)
+                rec = write_i32_le(rec, 41, detail.castingTime or -1)
+                local aFlags = 0
+                if detail.usable then
+                    aFlags = bor(aFlags, 0x01) -- available
+                    aFlags = bor(aFlags, 0x02) -- usable
+                end
+                if detail.unusable then
+                    -- still available (in inventory) but not usable right now
+                    aFlags = bor(aFlags, 0x01)
+                end
+                if not detail.outOfRange then aFlags = bor(aFlags, 0x04) end -- inRange
+                if detail.passive then aFlags = bor(aFlags, 0x08) end
+                if detail.channeled then aFlags = bor(aFlags, 0x10) end
+                rec = write_u8(rec, 45, aFlags)
+                rec = write_u8(rec, 46, 0)
+                records = records .. rec
+                count = count + 1
+            else
+                complete = false
+            end
+        end
+        isKnown = complete
+    end
 
     buf = write_u16_le(buf, 1, count)
     buf = buf .. records
@@ -592,42 +608,43 @@ local function encode_auras(unitSpecifier)
     local isKnown = false
     local records = ""
 
-    -- TODO: Use Inspect.Buff.List(unitSpecifier) and Inspect.Buff.Detail()
-    -- local buffIds = Inspect.Buff.List(unitSpecifier)
-    -- if buffIds then
-    --     local complete = true
-    --     for _, buffId in ipairs(buffIds) do
-    --         if count >= 64 then
-    --             complete = false
-    --             break
-    --         end
-    --         local detail = Inspect.Buff.Detail(unitSpecifier, buffId)
-    --         if detail then
-    --             local rec = string.rep("\0", 70)
-    --             rec = write_fixed_ascii(rec, 1, tostring(detail.buffId or buffId), 32)
-    --             local aname = detail.name or ""
-    --             rec = write_u16_le(rec, 33, #aname)
-    --             for i = 1, math.min(#aname, 32) do
-    --                 rec = write_u8(rec, 35 + i - 1, string.byte(aname, i))
-    --             end
-    --             rec = write_u8(rec, 67, detail.stacks or 0)
-    --             local aFlags = 0
-    --             if detail.debuff then aFlags = aFlags | 0x01 end
-    --             if detail.curse then aFlags = aFlags | 0x02 end
-    --             if detail.disease then aFlags = aFlags | 0x04 end
-    --             if detail.poison then aFlags = aFlags | 0x08 end
-    --             rec = write_u8(rec, 68, aFlags)
-    --             local remain = detail.remaining or -1
-    --             if remain >= 0 then remain = remain & 0xFFFF end
-    --             rec = write_u16_le(rec, 69, remain)
-    --             records = records .. rec
-    --             count = count + 1
-    --         else
-    --             complete = false
-    --         end
-    --     end
-    --     isKnown = complete
-    -- end
+    local ok, buffIds = pcall(Inspect.Buff.List, unitSpecifier)
+    if ok and buffIds then
+        local complete = true
+        for _, buffId in ipairs(buffIds) do
+            if count >= 64 then
+                complete = false
+                break
+            end
+            local dok, detail = pcall(Inspect.Buff.Detail, unitSpecifier, buffId)
+            if dok and detail then
+                local rec = string.rep("\0", 70)
+                rec = write_fixed_ascii(rec, 1, tostring(detail.buffId or buffId), 32)
+                local aname = detail.name or ""
+                rec = write_u16_le(rec, 33, #aname)
+                for i = 1, math.min(#aname, 32) do
+                    rec = write_u8(rec, 35 + i - 1, string.byte(aname, i))
+                end
+                rec = write_u8(rec, 67, detail.stacks or 0)
+                local aFlags = 0
+                if detail.debuff then aFlags = bor(aFlags, 0x01) end
+                if detail.curse then aFlags = bor(aFlags, 0x02) end
+                if detail.disease then aFlags = bor(aFlags, 0x04) end
+                if detail.poison then aFlags = bor(aFlags, 0x08) end
+                rec = write_u8(rec, 68, aFlags)
+                local remain = detail.remaining or -1
+                if remain >= 0 then
+                    remain = band(remain, 0xFFFF)
+                end
+                rec = write_u16_le(rec, 69, remain)
+                records = records .. rec
+                count = count + 1
+            else
+                complete = false
+            end
+        end
+        isKnown = complete
+    end
 
     buf = write_u16_le(buf, 1, count)
     buf = buf .. records
@@ -726,8 +743,8 @@ local function write_frame(region, bufferOffset)
     local frameTime = math.floor((Inspect.Time.Frame() or 0) * 1000)
     local isSecure = false
 
-    -- TODO: Inspect.System.Secure()
-    -- isSecure = Inspect.System.Secure() or false
+    local ok, sec = pcall(Inspect.System.Secure)
+    if ok then isSecure = sec or false end
 
     local payload, sectionsMask = build_payload()
     local payloadLength = #payload
@@ -799,7 +816,41 @@ end
 -- The first call happens synchronously from on_addon_load() to populate
 -- the initial frame before any event-driven update fires.
 ----------------------------------------------------------------------
+local indicatorFrame = nil
+local gameInputReady = true
+
+-- Check if game input is ready (not in chat, keybind screen, or modal dialog)
+local function check_game_input_ready()
+    -- Check chat focus: try to get the focused UI textfield
+    local ok, focus = pcall(UI.Textfield.Focus)
+    if ok and focus then
+        return false -- user is typing in a text field
+    end
+    -- Check secure mode
+    local sok, sec = pcall(Inspect.System.Secure)
+    if sok and sec then
+        -- Secure mode usually means combat/keybind screens
+        -- We can still observe but input may be restricted
+    end
+    return true
+end
+
+-- Update UI indicator color based on state
+local function update_indicator()
+    if not indicatorFrame then return end
+    local r, g, b = 0.3, 1.0, 0.3 -- green = healthy
+    if not gameInputReady then
+        r, g, b = 1.0, 0.7, 0.2 -- yellow = input blocked
+    end
+    if not region then
+        r, g, b = 1.0, 0.3, 0.3 -- red = not initialized
+    end
+    pcall(indicatorFrame.SetFontColor, indicatorFrame, r, g, b, 1.0)
+end
+
 local function on_update_begin()
+    gameInputReady = check_game_input_ready()
+
     if not region then
         init_region()
     end
@@ -814,6 +865,7 @@ local function on_update_begin()
     end
 
     region = write_frame(region, bufferOffset)
+    update_indicator()
 end
 
 ----------------------------------------------------------------------
@@ -837,6 +889,21 @@ end
 ----------------------------------------------------------------------
 local function on_addon_load()
     init_region()
+
+    -- Create small UI indicator showing addon status
+    local ok, ctx = pcall(UI.CreateContext, "BotDsBridge")
+    if ok and ctx then
+        local fok, frame = pcall(UI.CreateFrame, "Text", "BotDsStatus", ctx)
+        if fok and frame then
+            pcall(frame.SetPoint, frame, "TOPLEFT", "UIParent", "TOPLEFT", 10, 10)
+            pcall(frame.SetWidth, frame, 120)
+            pcall(frame.SetHeight, frame, 20)
+            pcall(frame.SetBackgroundColor, frame, 0, 0, 0, 0.6)
+            pcall(frame.SetText, frame, "BotDs Bridge")
+            pcall(frame.SetFontColor, frame, 0.3, 1.0, 0.3, 1.0)
+            indicatorFrame = frame
+        end
+    end
 
     if type(Command) == "table"
         and type(Command.Event) == "table"

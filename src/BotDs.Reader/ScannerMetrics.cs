@@ -57,6 +57,12 @@ public sealed record ScannerMetrics
     /// <summary>Timestamp of the most recent read cycle.</summary>
     public DateTime LastReadCycleUtc { get; init; }
 
+    /// <summary>Number of small-window rescans that found the sentinel.</summary>
+    public long SmallWindowHits { get; init; }
+
+    /// <summary>Number of small-window rescans that failed to find the sentinel.</summary>
+    public long SmallWindowMisses { get; init; }
+
     public static ScannerMetrics Empty => new();
 
     public ScannerMetrics WithIncrements(
@@ -75,6 +81,8 @@ public sealed record ScannerMetrics
         TimeSpan? scanDurationDelta = null,
         TimeSpan? readDurationDelta = null,
         long? readCycleFailuresDelta = null,
+        long? smallWindowHitsDelta = null,
+        long? smallWindowMissesDelta = null,
         DateTime? lastScanUtc = null,
         DateTime? lastReadCycleUtc = null)
     {
@@ -95,6 +103,8 @@ public sealed record ScannerMetrics
             TotalScanDuration = TotalScanDuration + (scanDurationDelta ?? TimeSpan.Zero),
             TotalReadDuration = TotalReadDuration + (readDurationDelta ?? TimeSpan.Zero),
             ReadCycleFailures = ReadCycleFailures + (readCycleFailuresDelta ?? 0),
+            SmallWindowHits = SmallWindowHits + (smallWindowHitsDelta ?? 0),
+            SmallWindowMisses = SmallWindowMisses + (smallWindowMissesDelta ?? 0),
             LastScanUtc = lastScanUtc ?? LastScanUtc,
             LastReadCycleUtc = lastReadCycleUtc ?? LastReadCycleUtc,
         };

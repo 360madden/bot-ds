@@ -4,6 +4,9 @@ Description = "V5 telemetry protocol emitter for BotDs combat reader"
 Author = "BotDs"
 Version = "0.1.0"
 Email = ""
+SavedVariables = {
+    BotDsDebug = "character",
+}
 RunOnStartup = {
     "main.lua"
 }

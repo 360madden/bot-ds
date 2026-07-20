@@ -30,7 +30,7 @@
   </header>
 
   <main id="main" class="dashboard" role="main">
-    <!-- Row 1: Connection / Controller / Profiles -->
+    <!-- Row 1: Connection / Controller / Scanner / Profiles -->
     <section class="card card--provider" aria-labelledby="provider-heading">
       <h2 id="provider-heading" class="card__title">Connection &amp; Provider</h2>
       <dl class="detail-grid">
@@ -111,6 +111,40 @@
           </div>
         </form>
       </dialog>
+    </section>
+
+    <section class="card card--scanner" id="scanner-section" aria-labelledby="scanner-heading">
+      <h2 id="scanner-heading" class="card__title">Scanner</h2>
+      <dl class="detail-grid">
+        <div class="detail-row">
+          <dt>PID</dt>
+          <dd id="scanner-pid" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Status</dt>
+          <dd id="scanner-status" class="status-badge">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Cache Hits</dt>
+          <dd id="scanner-cache-hits" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Cache Misses</dt>
+          <dd id="scanner-cache-misses" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Full Scans</dt>
+          <dd id="scanner-full-scans" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Read Cycles (est)</dt>
+          <dd id="scanner-read-cycles" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Read Failures</dt>
+          <dd id="scanner-read-fails" class="mono">—</dd>
+        </div>
+      </dl>
     </section>
 
     <section class="card card--profiles" aria-labelledby="profiles-heading">

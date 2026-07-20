@@ -12,7 +12,8 @@ public static class V5HealthMapper
     /// <summary>
     /// Convert a StableReadResult into a Core ProviderStatus.
     /// </summary>
-    public static ProviderStatus ToProviderStatus(StableReadResult result, DateTimeOffset receivedAt)
+    public static ProviderStatus ToProviderStatus(StableReadResult result, DateTimeOffset receivedAt,
+        long sourceGeneration = 0, TimeSpan gameStateEvidenceAge = default)
     {
         ParsedV5Frame? frame = result.Frame;
         ParsedProviderInfo? info = frame?.Provider;
@@ -20,6 +21,7 @@ public static class V5HealthMapper
         TimeSpan age = frame is null ? TimeSpan.MaxValue : result.Age;
 
         string healthReason = result.FailureDetail ?? result.TransportHealth.ToString();
+        bool isHeartbeat = frame?.Header.IsHeartbeat ?? false;
 
         return new ProviderStatus(
             Health: result.TransportHealth,
@@ -33,7 +35,10 @@ public static class V5HealthMapper
             Fault: result.TransportHealth is ProviderHealth.Faulted or ProviderHealth.Disconnected
                 ? healthReason
                 : null,
-            IsTruncated: result.TransportHealth == ProviderHealth.Faulted);
+            IsTruncated: result.TransportHealth == ProviderHealth.Faulted,
+            IsHeartbeat: isHeartbeat,
+            SourceGeneration: sourceGeneration,
+            GameStateEvidenceAge: isHeartbeat ? gameStateEvidenceAge : age);
     }
 
     /// <summary>
@@ -43,11 +48,13 @@ public static class V5HealthMapper
     /// </summary>
     public static TelemetryFrame ToTelemetryFrame(
         StableReadResult result,
-        DateTimeOffset receivedAt)
+        DateTimeOffset receivedAt,
+        long sourceGeneration = 0,
+        TimeSpan gameStateEvidenceAge = default)
     {
         if (result.Frame is not { } frame)
         {
-            ProviderStatus provider = ToProviderStatus(result, receivedAt);
+            ProviderStatus provider = ToProviderStatus(result, receivedAt, sourceGeneration, gameStateEvidenceAge);
             return new TelemetryFrame(
                 Provider: provider,
                 Player: null,
@@ -59,7 +66,7 @@ public static class V5HealthMapper
                 IsTargetAurasKnown: false);
         }
 
-        ProviderStatus status = ToProviderStatus(result, receivedAt);
+        ProviderStatus status = ToProviderStatus(result, receivedAt, sourceGeneration, gameStateEvidenceAge);
 
         UnitState? player = ToUnitState(frame.Player);
         UnitState? target = ToUnitState(frame.Target);

@@ -38,9 +38,10 @@ public static class DashboardEndpoints
         [FromServices] SnapshotPublisher publisher,
         [FromServices] ControllerStateMachine stateMachine,
         [FromServices] ProfileService profileService,
-        [FromServices] EvaluatorLoop evaluator)
+        [FromServices] EvaluatorLoop evaluator,
+        [FromServices] TelemetryReaderLoop? readerLoop = null)
     {
-        return Results.Json(CreateStatusPayload(publisher, stateMachine, profileService, evaluator), JsonOptions);
+        return Results.Json(CreateStatusPayload(publisher, stateMachine, profileService, evaluator, readerLoop), JsonOptions);
     }
 
     private static IResult GetProfiles([FromServices] ProfileService profileService)
@@ -186,6 +187,7 @@ public static class DashboardEndpoints
         [FromServices] ControllerStateMachine stateMachine,
         [FromServices] EvaluatorLoop evaluator,
         [FromServices] ProfileService profileService,
+        [FromServices] TelemetryReaderLoop? readerLoop,
         [FromServices] ILogger<Program> log,
         CancellationToken ct)
     {
@@ -208,7 +210,7 @@ public static class DashboardEndpoints
                     lastSequence = frame.Provider.Sequence;
                     lastState = currentState;
 
-                    object payload = CreateStatusPayload(publisher, stateMachine, profileService, evaluator);
+                    object payload = CreateStatusPayload(publisher, stateMachine, profileService, evaluator, readerLoop);
 
                     await context.Response.WriteAsync("data: ", ct);
                     await JsonSerializer.SerializeAsync(context.Response.Body, payload, JsonOptions, ct);
@@ -229,7 +231,8 @@ public static class DashboardEndpoints
         SnapshotPublisher publisher,
         ControllerStateMachine stateMachine,
         ProfileService profileService,
-        EvaluatorLoop evaluator)
+        EvaluatorLoop evaluator,
+        TelemetryReaderLoop? readerLoop = null)
     {
         TelemetryFrame frame = publisher.Latest;
         var (state, stopReason, message, pendingAction) = stateMachine.Snapshot;
@@ -253,6 +256,31 @@ public static class DashboardEndpoints
                 frame.Provider.Fault,
                 frame.Provider.IsTruncated,
             },
+            Scanner = readerLoop is not null
+                ? new
+                {
+                    IsAttached = readerLoop.AttachmentPid > 0,
+                    readerLoop.AttachmentPid,
+                    readerLoop.AttachmentGeneration,
+                    Metrics = new
+                    {
+                        readerLoop.Metrics.FullScanCount,
+                        readerLoop.Metrics.CacheHitCount,
+                        readerLoop.Metrics.CacheMissCount,
+                        readerLoop.Metrics.SmallWindowHits,
+                        readerLoop.Metrics.SmallWindowMisses,
+                        readerLoop.Metrics.ReadFailures,
+                        readerLoop.Metrics.ReadCycleFailures,
+                        readerLoop.Metrics.CandidateLimitHits,
+                        readerLoop.Metrics.AttachmentCount,
+                        readerLoop.Metrics.BytesScanned,
+                        readerLoop.Metrics.ValidCandidatesFound,
+                        readerLoop.Metrics.LastScanUtc,
+                        readerLoop.Metrics.LastReadCycleUtc,
+                    },
+                    LastResultHealth = readerLoop.LastResult?.ReadResult.TransportHealth.ToString(),
+                }
+                : null,
             Controller = new
             {
                 State = state.ToString(),

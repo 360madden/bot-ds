@@ -1,5 +1,6 @@
 using BotDs.App.Endpoints;
 using BotDs.App.Services;
+using BotDs.Reader;
 using Serilog;
 using Serilog.Context;
 using Serilog.Formatting.Compact;
@@ -34,6 +35,32 @@ try
     builder.Services.AddSingleton<EvaluatorLoop>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<EvaluatorLoop>());
 
+    // ── Scanner / telemetry source ────────────────────────────
+    string? processName = builder.Configuration.GetValue<string>("BotDs:Scanner:ProcessName");
+    int? processId = builder.Configuration.GetValue<int?>("BotDs:Scanner:ProcessId");
+    var selector = new ProcessSelector
+    {
+        ProcessName = processName,
+        ProcessId = processId,
+    };
+    if (!selector.IsValid)
+    {
+        Log.Warning("No valid process selector configured (BotDs:Scanner:ProcessName or ProcessId). " +
+                     "Scanner will remain disconnected until configured.");
+    }
+
+    TimeSpan scannerMaxAge = TimeSpan.FromMilliseconds(
+        builder.Configuration.GetValue<int>("BotDs:Scanner:LocalMaxAgeMs", 500));
+
+    builder.Services.AddSingleton(TimeProvider.System);
+    builder.Services.AddSingleton(selector);
+    builder.Services.AddSingleton(sp => new V5ScannerService(
+        sp.GetRequiredService<ProcessSelector>(),
+        scannerMaxAge,
+        timeProvider: sp.GetRequiredService<TimeProvider>()));
+    builder.Services.AddSingleton<TelemetryReaderLoop>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<TelemetryReaderLoop>());
+
     WebApplication app = builder.Build();
 
     app.Use(async (ctx, next) =>
@@ -62,6 +89,9 @@ try
         Log.Warning("BotDs:Dashboard:ApiToken is not configured; read API access is disabled");
     if (string.IsNullOrWhiteSpace(controlToken))
         Log.Warning("BotDs:Dashboard:ControlToken is not configured; control operations are disabled");
+
+    if (selector.IsValid)
+        Log.Information("Scanner configured: {Selector}", selector.ToString());
 
     app.Run();
 }

@@ -55,7 +55,10 @@ public sealed record ProviderStatus(
     TimeSpan Age,
     string? ClientVersion = null,
     string? Fault = null,
-    bool IsTruncated = false)
+    bool IsTruncated = false,
+    bool IsHeartbeat = false,
+    long SourceGeneration = 0,
+    TimeSpan GameStateEvidenceAge = default)
 {
     public bool IsUsable(TimeSpan maximumAge) => IsUsable(maximumAge, DateTimeOffset.UtcNow);
 
@@ -64,22 +67,17 @@ public sealed record ProviderStatus(
         if (Health != ProviderHealth.Healthy || IsTruncated || maximumAge < TimeSpan.Zero)
             return false;
 
-        return TryGetEffectiveAge(nowUtc, out TimeSpan effectiveAge) && effectiveAge <= maximumAge;
-    }
-
-    private bool TryGetEffectiveAge(DateTimeOffset nowUtc, out TimeSpan effectiveAge)
-    {
-        effectiveAge = default;
-        if (Age < TimeSpan.Zero || nowUtc < ReceivedAtUtc)
+        // Heartbeats don't carry fresh game-state evidence — use carried evidence age
+        TimeSpan baseAge = IsHeartbeat ? GameStateEvidenceAge : Age;
+        if (baseAge < TimeSpan.Zero || nowUtc < ReceivedAtUtc)
             return false;
-
         TimeSpan elapsed = nowUtc - ReceivedAtUtc;
-        if (Age.Ticks > TimeSpan.MaxValue.Ticks - elapsed.Ticks)
+        if (baseAge.Ticks > TimeSpan.MaxValue.Ticks - elapsed.Ticks)
             return false;
-
-        effectiveAge = TimeSpan.FromTicks(Age.Ticks + elapsed.Ticks);
-        return true;
+        TimeSpan effectiveAge = TimeSpan.FromTicks(baseAge.Ticks + elapsed.Ticks);
+        return effectiveAge <= maximumAge;
     }
+
 }
 
 public sealed record HealthState(int? Current, int? Maximum)
@@ -162,7 +160,8 @@ public sealed record TelemetryFrame(
     bool IsTargetAurasKnown = false)
 {
     public static TelemetryFrame Empty(DateTimeOffset now) => new(
-        new ProviderStatus(ProviderHealth.Disconnected, "", "", 0, 0, now, TimeSpan.MaxValue),
+        new ProviderStatus(ProviderHealth.Disconnected, "", "", 0, 0, now, TimeSpan.MaxValue,
+            IsHeartbeat: false, SourceGeneration: 0, GameStateEvidenceAge: TimeSpan.MaxValue),
         null,
         null,
         ReadOnlyDictionary<string, AbilityState>.Empty,
