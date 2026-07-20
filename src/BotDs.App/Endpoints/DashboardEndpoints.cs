@@ -306,5 +306,38 @@ public static class DashboardEndpoints
         };
     }
 
+    public static IEndpointRouteBuilder MapSettingsEndpoints(this IEndpointRouteBuilder builder)
+    {
+        RouteGroupBuilder api = builder.MapGroup("/api/settings");
+        api.MapGet("/", GetSettings);
+        api.MapPut("/", PutSettings);
+        return builder;
+    }
+
+    private static IResult GetSettings([FromServices] LocalSettingsService settings)
+        => Results.Json(settings.Current, JsonOptions);
+
+    private static async Task<IResult> PutSettings(
+        [FromBody] BotDsSettings proposed,
+        [FromServices] LocalSettingsService settings,
+        [FromServices] ControllerStateMachine stateMachine,
+        [FromServices] ILogger<Program> log,
+        CancellationToken ct)
+    {
+        IDisposable? configurationLease = stateMachine.TryBeginConfiguration();
+        if (configurationLease is null)
+            return Results.Conflict(new { Error = "Disarm before changing settings." });
+
+        using (configurationLease)
+        {
+            var errors = await Task.Run(() => settings.TrySave(proposed), ct);
+            if (errors is not null)
+                return Results.BadRequest(new { Error = "Validation failed", Errors = errors });
+
+            log.LogInformation("Settings updated via dashboard");
+            return Results.Ok(settings.Current);
+        }
+    }
+
     private sealed record SetProfileRequest(string ProfileId);
 }

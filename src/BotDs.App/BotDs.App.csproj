@@ -16,4 +16,8 @@
     <RootNamespace>BotDs.App</RootNamespace>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="BotDs.Tests" />
+  </ItemGroup>
+
 </Project>

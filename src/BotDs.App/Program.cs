@@ -35,6 +35,15 @@ try
     builder.Services.AddSingleton<EvaluatorLoop>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<EvaluatorLoop>());
 
+    // ── Settings ─────────────────────────────────────────────
+    string settingsPath = builder.Configuration.GetValue<string>("BotDs:Settings:FilePath")
+        ?? Path.Combine("config", "botds-settings.json");
+    string? settingsDir = Path.GetDirectoryName(settingsPath);
+    if (!string.IsNullOrEmpty(settingsDir))
+        Directory.CreateDirectory(settingsDir);
+    builder.Services.AddSingleton(sp => new LocalSettingsService(settingsPath,
+        sp.GetRequiredService<ILogger<LocalSettingsService>>()));
+
     // ── Scanner / telemetry source ────────────────────────────
     string? processName = builder.Configuration.GetValue<string>("BotDs:Scanner:ProcessName");
     int? processId = builder.Configuration.GetValue<int?>("BotDs:Scanner:ProcessId");
@@ -74,6 +83,7 @@ try
     app.UseMiddleware<DashboardSecurityMiddleware>();
     app.UseStaticFiles();
     app.MapDashboardEndpoints();
+    app.MapSettingsEndpoints();
 
     ProfileService profileService = app.Services.GetRequiredService<ProfileService>();
     Directory.CreateDirectory(profileService.DirectoryPath);

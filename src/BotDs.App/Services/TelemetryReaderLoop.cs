@@ -14,6 +14,7 @@ public sealed class TelemetryReaderLoop : BackgroundService
 {
     private readonly V5ScannerService _scanner;
     private readonly SnapshotPublisher _publisher;
+    private readonly SnapshotAssembler _assembler;
     private readonly ILogger<TelemetryReaderLoop> _log;
     private readonly TimeSpan _readInterval;
     private readonly TimeSpan _maxTelemetryAge;
@@ -26,14 +27,6 @@ public sealed class TelemetryReaderLoop : BackgroundService
     private int _consecutiveFaults;
     private int _successfulReadCount;
 
-    // Snapshot assembler state: carries game-state across heartbeats within
-    // the same source generation and session, clears on fault/boundary.
-    private long _sourceGeneration;
-    private Guid _lastSessionId;
-    private TelemetryFrame _lastFullFrame = TelemetryFrame.Empty(DateTimeOffset.MinValue);
-    private long _lastGameStateEvidenceTimestamp;
-    private readonly object _assemblerLock = new();
-
     public TelemetryReaderLoop(
         V5ScannerService scanner,
         SnapshotPublisher publisher,
@@ -45,6 +38,7 @@ public sealed class TelemetryReaderLoop : BackgroundService
         _publisher = publisher;
         _log = log;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _assembler = new SnapshotAssembler(_timeProvider);
         _readInterval = TimeSpan.FromMilliseconds(
             configuration.GetValue<int>("BotDs:Scanner:ReadIntervalMs", 50));
         _maxTelemetryAge = TimeSpan.FromMilliseconds(
@@ -66,69 +60,9 @@ public sealed class TelemetryReaderLoop : BackgroundService
     /// <summary>Monotonic attachment generation.</summary>
     public long AttachmentGeneration => _scanner.AttachmentGeneration;
 
-    /// <summary>
-    /// Heartbeat-aware snapshot assembly. Preserves game-state sections across
-    /// heartbeats within the same session and source generation. Clears carried
-    /// state on session change, source fault, process exit, or non-heartbeat
-    /// frames with no game-state sections.
-    /// </summary>
+    /// <summary>Delegate snapshot assembly to the extracted SnapshotAssembler.</summary>
     private TelemetryFrame AssembleSnapshot(ScannerReadResult result, DateTimeOffset receivedAt)
-    {
-        lock (_assemblerLock)
-        {
-            bool isFault = !result.IsUsable;
-            bool isHeartbeat = result.Frame?.Header.IsHeartbeat ?? false;
-            bool hasGameState = result.Frame is not null && !isHeartbeat;
-
-            // Clear carried state on fault, generation change, or session change
-            if (isFault || result.AttachmentGeneration != _sourceGeneration)
-            {
-                _lastFullFrame = TelemetryFrame.Empty(receivedAt);
-                _lastGameStateEvidenceTimestamp = 0;
-                _sourceGeneration = result.AttachmentGeneration;
-                _lastSessionId = Guid.Empty;
-            }
-
-            Guid currentSession = result.Frame?.Provider?.SessionId ?? Guid.Empty;
-            if (currentSession != Guid.Empty && currentSession != _lastSessionId)
-            {
-                _lastFullFrame = TelemetryFrame.Empty(receivedAt);
-                _lastGameStateEvidenceTimestamp = 0;
-                _lastSessionId = currentSession;
-            }
-
-            // Compute game-state evidence age
-            TimeSpan gameStateEvidenceAge = TimeSpan.MaxValue;
-            if (_lastGameStateEvidenceTimestamp > 0)
-            {
-                long now = _timeProvider.GetTimestamp();
-                gameStateEvidenceAge = _timeProvider.GetElapsedTime(_lastGameStateEvidenceTimestamp);
-            }
-
-            // Map the raw scanner result to a TelemetryFrame
-            TelemetryFrame frame = V5HealthMapper.ToTelemetryFrame(
-                result.ReadResult, receivedAt, _sourceGeneration, gameStateEvidenceAge);
-
-            if (hasGameState && frame.Player is not null)
-            {
-                // Full frame with game state — update carried state and evidence timestamp
-                _lastFullFrame = frame;
-                _lastGameStateEvidenceTimestamp = _timeProvider.GetTimestamp();
-            }
-            else if (isHeartbeat && _lastFullFrame.Player is not null)
-            {
-                // Heartbeat: preserve game-state from last full frame,
-                // update provider status only (transport liveness)
-                frame = _lastFullFrame with
-                {
-                    Provider = frame.Provider,
-                };
-            }
-            // else: no game state and no carried state — return mapped frame as-is
-
-            return frame;
-        }
-    }
+        => _assembler.Assemble(result, receivedAt);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

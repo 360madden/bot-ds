@@ -367,7 +367,7 @@ public sealed class V5ScannerService : IDisposable
         rawMagicMatchesDelta: d.RawMatch, exactSentinelMatchesDelta: d.ExactSent,
         validCandidatesDelta: d.Candidates, candidateLimitHitsDelta: d.CandidateLimit,
         readFailuresDelta: d.ReadFails, scanDurationDelta: d.ScanDur,
-        readDurationDelta: _timeProvider.GetElapsedTime(t0), readCycleFailuresDelta: d.ReadCycleFails,            smallWindowHitsDelta: d.WindowHits,
+        readDurationDelta: _timeProvider.GetElapsedTime(t0), readCycleFailuresDelta: d.ReadCycleFails, smallWindowHitsDelta: d.WindowHits,
             smallWindowMissesDelta: d.WindowMisses,
             lastScanUtc: d.FullScan > 0 ? _timeProvider.GetUtcNow().UtcDateTime : _metrics.LastScanUtc,
         lastReadCycleUtc: _timeProvider.GetUtcNow().UtcDateTime);
