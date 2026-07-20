@@ -367,6 +367,9 @@ body {
   font-weight: 600;
   text-transform: capitalize;
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .status-badge::before {
   content: "";
@@ -530,6 +533,14 @@ dialog::backdrop {
 .profile-controls .select {
   flex: 1;
   min-width: 0;
+}
+
+#btn-edit-profile {
+  margin-top: .75rem;
+}
+
+.profile-edit-btn {
+  margin-top: .75rem;
 }
 
 /* ---------- Health bar ---------- */
@@ -754,13 +765,100 @@ dialog::backdrop {
   .control-group .btn {
     width: 100%;
   }
+
+  .form-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: .25rem;
+  }
+  .form-row input {
+    width: 100%;
+  }
+
+  .settings-form fieldset {
+    padding: .5rem .75rem;
+  }
+
+  .coord-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .action-history-table-wrap {
+    max-height: 220px;
+  }
 }
 
 @media (max-width: 420px) {
   html { font-size: 14px; }
 }
 
+/* ---------- Settings form ---------- */
+.settings-form fieldset {
+  border: 1px solid #21262d;
+  border-radius: var(--radius-sm);
+  padding: .75rem 1rem;
+  margin-bottom: .75rem;
+}
+
+.settings-form legend {
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 0 .5rem;
+}
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+  padding: .35rem 0;
+}
+
+.form-row label {
+  font-size: .82rem;
+  color: var(--text-secondary);
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.form-row input {
+  flex: 1;
+  min-width: 100px;
+  padding: .35rem .55rem;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid #30363d;
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: .82rem;
+}
+.form-row input:focus {
+  border-color: var(--accent);
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  margin-top: .5rem;
+  padding-top: .5rem;
+  border-top: 1px solid #21262d;
+}
+
+.settings-status {
+  font-size: .82rem;
+  color: var(--text-secondary);
+}
+
 /* ---------- Coordinator ---------- */
+.card--coordinator {
+  grid-column: 1 / -1;
+}
+
 .coord-actions {
   display: flex;
   gap: .5rem;
