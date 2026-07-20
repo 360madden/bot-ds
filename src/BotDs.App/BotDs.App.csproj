@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\BotDs.Core\BotDs.Core.csproj" />
     <ProjectReference Include="..\BotDs.Reader\BotDs.Reader.csproj" />
+    <ProjectReference Include="..\BotDs.Input\BotDs.Input.csproj" />
   </ItemGroup>
 
   <ItemGroup>

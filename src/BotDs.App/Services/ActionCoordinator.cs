@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using BotDs.Core;
+using BotDs.Input;
 
 namespace BotDs.App.Services;
 
@@ -72,6 +73,7 @@ public sealed class ActionCoordinator
     private readonly ControllerStateMachine _stateMachine;
     private readonly ProfileService _profiles;
     private readonly ArmingReadinessService _readiness;
+    private readonly IKeySink _keySink;
     private readonly TimeProvider _time;
     private readonly ILogger<ActionCoordinator> _log;
 
@@ -101,6 +103,7 @@ public sealed class ActionCoordinator
         ProfileService profiles,
         ArmingReadinessService readiness,
         IConfiguration configuration,
+        IKeySink? keySink = null,
         TimeProvider? timeProvider = null,
         ILogger<ActionCoordinator>? log = null)
     {
@@ -108,6 +111,7 @@ public sealed class ActionCoordinator
         _stateMachine = stateMachine;
         _profiles = profiles;
         _readiness = readiness;
+        _keySink = keySink ?? new FakeKeySink();
         _time = timeProvider ?? TimeProvider.System;
         _log = log ?? NullLoggerFactory.Instance.CreateLogger<ActionCoordinator>();
 
@@ -290,11 +294,33 @@ public sealed class ActionCoordinator
                 // ── Dispatch (or dry-run log) ─────────────────
                 if (_outputMode == OutputMode.DryRun)
                 {
+                    bool dispatched = _keySink.DispatchKey(action.Key, CancellationToken.None);
+                    if (!dispatched)
+                    {
+                        return RecordAndReturnLocked(action, DispatchOutcome.RevalidationFailed,
+                            $"Key sink rejected '{action.Key}' in dry-run");
+                    }
                     _log.LogInformation(
                         "[DRY-RUN] Action: Rule={RuleId}, Ability={AbilityId}, Key={Key}, Ack={Ack}, Seq={Seq}",
                         action.RuleId, action.AbilityId, action.Key, action.Acknowledgement, action.FrameSequence);
                 }
-                // Live mode (M7): actual SendInput goes here
+                else if (_outputMode == OutputMode.Live)
+                {
+                    if (!_keySink.IsReady)
+                    {
+                        return RecordAndReturnLocked(action, DispatchOutcome.RevalidationFailed, "Key sink not ready");
+                    }
+                    bool dispatched = _keySink.DispatchKey(action.Key, CancellationToken.None);
+                    if (!dispatched)
+                    {
+                        _keySink.LatchFault($"Key dispatch failed for '{action.Key}'");
+                        _stateMachine.Disarm();
+                        return RecordAndReturnLocked(action, DispatchOutcome.RevalidationFailed, "Key sink rejected dispatch — disarmed");
+                    }
+                    _log.LogInformation(
+                        "[LIVE] Key dispatched: {Key} for {AbilityId}",
+                        action.Key, action.AbilityId);
+                }
 
                 // Record dispatch
                 _lastDispatchUtc = now;

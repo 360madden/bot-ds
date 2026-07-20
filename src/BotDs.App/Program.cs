@@ -1,5 +1,6 @@
 using BotDs.App.Endpoints;
 using BotDs.App.Services;
+using BotDs.Input;
 using BotDs.Reader;
 using Serilog;
 using Serilog.Context;
@@ -34,6 +35,7 @@ try
     builder.Services.AddSingleton<ControllerStateMachine>();
     builder.Services.AddSingleton<EvaluatorLoop>();
     builder.Services.AddSingleton<ArmingReadinessService>();
+    builder.Services.AddSingleton<IKeySink>(new FakeKeySink());
     builder.Services.AddSingleton<ActionCoordinator>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<EvaluatorLoop>());
 

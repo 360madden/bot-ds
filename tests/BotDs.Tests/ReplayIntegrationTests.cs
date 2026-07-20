@@ -347,7 +347,7 @@ public sealed class ReplayIntegrationTests : IDisposable
             })
             .Build();
 
-        var coordinator = new ActionCoordinator(pub, sm, profiles, readiness, config, time);
+        var coordinator = new ActionCoordinator(pub, sm, profiles, readiness, config, keySink: null, timeProvider: time);
         return (coordinator, sm, pub, time);
     }
 
