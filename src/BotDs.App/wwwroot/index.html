@@ -94,17 +94,15 @@
           <p class="arm-dialog__warning">
             Arming enables configured combat actions while the current telemetry remains valid.
           </p>
-          <fieldset class="arm-dialog__checks">
-            <legend class="sr-only">Confirm arming conditions</legend>
-            <label class="check-label">
-              <input type="checkbox" id="arm-check-target" required />
-              A hostile target is selected
-            </label>
-            <label class="check-label">
-              <input type="checkbox" id="arm-check-ready" required />
-              The provider is healthy
-            </label>
-          </fieldset>
+          <div id="arm-readiness-section" class="arm-readiness" aria-live="polite">
+            <p id="arm-readiness-loading" class="arm-readiness__loading">Checking readiness…</p>
+            <div id="arm-readiness-result" hidden>
+              <p class="arm-readiness__status" id="arm-readiness-status"></p>
+              <ul class="arm-readiness__blockers" id="arm-readiness-blockers"></ul>
+              <ul class="arm-readiness__warnings" id="arm-readiness-warnings"></ul>
+            </div>
+            <p id="arm-readiness-error" class="arm-readiness__error" hidden></p>
+          </div>
           <div class="arm-dialog__actions">
             <button type="button" class="btn btn--ghost" id="arm-dialog-cancel">Cancel</button>
             <button type="submit" class="btn btn--arm" id="arm-dialog-confirm" disabled>Arm Now</button>

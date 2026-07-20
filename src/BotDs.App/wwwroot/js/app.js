@@ -104,8 +104,12 @@
   const armDialogForm = $("arm-dialog-form");
   const armDialogCancel = $("arm-dialog-cancel");
   const armDialogConfirm = $("arm-dialog-confirm");
-  const armCheckTarget = $("arm-check-target");
-  const armCheckReady = $("arm-check-ready");
+  const armReadinessLoading = $("arm-readiness-loading");
+  const armReadinessResult = $("arm-readiness-result");
+  const armReadinessStatus = $("arm-readiness-status");
+  const armReadinessBlockers = $("arm-readiness-blockers");
+  const armReadinessWarnings = $("arm-readiness-warnings");
+  const armReadinessError = $("arm-readiness-error");
 
   // Profiles
   const profileSelect = $("profile-select");
@@ -823,16 +827,57 @@
   }
 
   // ---- Arm dialog ----
-  function openArmDialog() {
-    armCheckTarget.checked = false;
-    armCheckReady.checked = false;
-    updateArmConfirm();
+  async function openArmDialog() {
+    // Show loading state
+    armReadinessLoading.hidden = false;
+    armReadinessResult.hidden = true;
+    armReadinessError.hidden = true;
+    armDialogConfirm.disabled = true;
     armDialog.showModal();
-    armCheckTarget.focus();
-  }
 
-  function updateArmConfirm() {
-    armDialogConfirm.disabled = !(armCheckTarget.checked && armCheckReady.checked);
+    try {
+      var readiness = await apiFetch("/api/readiness");
+      armReadinessLoading.hidden = true;
+      armReadinessResult.hidden = false;
+
+      if (readiness.canArm) {
+        armReadinessStatus.textContent = "✓ Ready to arm";
+        armReadinessStatus.className = "arm-readiness__status arm-readiness__status--ok";
+        armDialogConfirm.disabled = false;
+      } else {
+        armReadinessStatus.textContent = "✗ Cannot arm — " + (readiness.blockers ? readiness.blockers.length : 0) + " blocker(s)";
+        armReadinessStatus.className = "arm-readiness__status arm-readiness__status--blocked";
+        armDialogConfirm.disabled = true;
+      }
+
+      // Render blockers
+      armReadinessBlockers.innerHTML = "";
+      if (readiness.blockers && readiness.blockers.length > 0) {
+        readiness.blockers.forEach(function (b) {
+          var li = document.createElement("li");
+          li.className = "arm-readiness__blocker";
+          li.textContent = "✗ " + b;
+          armReadinessBlockers.appendChild(li);
+        });
+      }
+
+      // Render warnings
+      armReadinessWarnings.innerHTML = "";
+      if (readiness.warnings && readiness.warnings.length > 0) {
+        readiness.warnings.forEach(function (w) {
+          var li = document.createElement("li");
+          li.className = "arm-readiness__warning";
+          li.textContent = "⚠ " + (typeof w === "string" ? w : w.message || "");
+          armReadinessWarnings.appendChild(li);
+        });
+      }
+    } catch (err) {
+      armReadinessLoading.hidden = true;
+      armReadinessError.hidden = false;
+      armReadinessError.textContent = "Failed to check readiness: " + err.message;
+      armDialogConfirm.disabled = true;
+      addLogEntry("warn", "arm", "Readiness check failed: " + err.message);
+    }
   }
 
   // ---- Event wiring ----
@@ -865,11 +910,22 @@
       armDialog.close();
     });
 
-    armCheckTarget.addEventListener("change", updateArmConfirm);
-    armCheckReady.addEventListener("change", updateArmConfirm);
-
-    armDialogForm.addEventListener("submit", function (e) {
+    armDialogForm.addEventListener("submit", async function (e) {
       e.preventDefault();
+      // Re-validate readiness at submit time
+      try {
+        var readiness = await apiFetch("/api/readiness");
+        if (!readiness.canArm) {
+          armReadinessStatus.textContent = "✗ Readiness changed — cannot arm";
+          armReadinessStatus.className = "arm-readiness__status arm-readiness__status--blocked";
+          armDialogConfirm.disabled = true;
+          addLogEntry("warn", "arm", "Readiness check failed at submit: " + (readiness.blockers ? readiness.blockers.join("; ") : ""));
+          return;
+        }
+      } catch (err) {
+        addLogEntry("error", "arm", "Readiness re-check failed: " + err.message);
+        return;
+      }
       armDialog.close();
       doControlAction(ARM_ENDPOINT, "Arm");
     });
