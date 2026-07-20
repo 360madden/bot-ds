@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BotDs Dashboard</title>
+  <link rel="stylesheet" href="css/site.css" />
+</head>
+<body>
+  <a href="#main" class="skip-link">Skip to main content</a>
+
+  <header class="top-bar" role="banner">
+    <div class="top-bar__brand">
+      <h1 class="top-bar__title">BotDs</h1>
+      <span class="top-bar__subtitle" id="conn-label">Disconnected</span>
+    </div>
+    <form class="token-form" id="token-form" role="search" aria-label="Authorization token">
+      <label for="token-input" class="sr-only">Bearer Token</label>
+      <input
+        id="token-input"
+        class="token-input"
+        type="password"
+        placeholder="Bearer token…"
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button type="submit" class="btn btn--sm">Set</button>
+      <button type="button" class="btn btn--sm btn--ghost" id="token-clear" aria-label="Clear token">Clear</button>
+    </form>
+  </header>
+
+  <main id="main" class="dashboard" role="main">
+    <!-- Row 1: Connection / Controller / Profiles -->
+    <section class="card card--provider" aria-labelledby="provider-heading">
+      <h2 id="provider-heading" class="card__title">Connection &amp; Provider</h2>
+      <dl class="detail-grid">
+        <div class="detail-row">
+          <dt>Health</dt>
+          <dd id="provider-health" class="status-badge" aria-live="polite">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Protocol</dt>
+          <dd id="provider-protocol">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Session</dt>
+          <dd id="provider-session" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Sequence</dt>
+          <dd id="provider-sequence" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Frame (ms)</dt>
+          <dd id="provider-frame">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Age</dt>
+          <dd id="provider-age">—</dd>
+        </div>
+        <div class="detail-row" id="provider-fault-row" hidden>
+          <dt>Fault</dt>
+          <dd id="provider-fault" class="fault-text">—</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="card card--controller" aria-labelledby="controller-heading">
+      <h2 id="controller-heading" class="card__title">Controller</h2>
+      <dl class="detail-grid">
+        <div class="detail-row">
+          <dt>State</dt>
+          <dd id="controller-state" class="status-badge" aria-live="polite">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Stop Reason</dt>
+          <dd id="controller-stop">—</dd>
+        </div>
+        <div class="detail-row" id="controller-decision-row" hidden>
+          <dt>Pending Decision</dt>
+          <dd id="controller-decision" class="mono">—</dd>
+        </div>
+      </dl>
+      <div class="control-group" role="group" aria-label="Bot controls">
+        <button type="button" class="btn btn--arm" id="btn-arm" disabled>Arm</button>
+        <button type="button" class="btn btn--disarm" id="btn-disarm" disabled>Disarm</button>
+        <button type="button" class="btn btn--stop" id="btn-estop" disabled>Emergency Stop</button>
+      </div>
+      <!-- Arm confirmation dialog -->
+      <dialog id="arm-dialog" class="arm-dialog" aria-labelledby="arm-dialog-title">
+        <form method="dialog" id="arm-dialog-form">
+          <h3 id="arm-dialog-title">Confirm Arm</h3>
+          <p class="arm-dialog__warning">
+            Arming will allow the bot to cast abilities in-game.
+            This may violate Gamigo's Terms of Service and result in account action.
+          </p>
+          <fieldset class="arm-dialog__checks">
+            <legend class="sr-only">Confirm arming conditions</legend>
+            <label class="check-label">
+              <input type="checkbox" id="arm-check-tos" required />
+              I accept the account risk
+            </label>
+            <label class="check-label">
+              <input type="checkbox" id="arm-check-target" required />
+              A hostile target is selected
+            </label>
+            <label class="check-label">
+              <input type="checkbox" id="arm-check-ready" required />
+              The provider is healthy
+            </label>
+          </fieldset>
+          <div class="arm-dialog__actions">
+            <button type="button" class="btn btn--ghost" id="arm-dialog-cancel">Cancel</button>
+            <button type="submit" class="btn btn--arm" id="arm-dialog-confirm" disabled>Arm Now</button>
+          </div>
+        </form>
+      </dialog>
+    </section>
+
+    <section class="card card--profiles" aria-labelledby="profiles-heading">
+      <h2 id="profiles-heading" class="card__title">Profiles</h2>
+      <div class="profile-controls">
+        <label for="profile-select" class="sr-only">Select profile</label>
+        <select id="profile-select" class="select" disabled>
+          <option value="">— none loaded —</option>
+        </select>
+        <button type="button" class="btn btn--sm" id="btn-reload-profiles" disabled>Reload</button>
+      </div>
+      <dl class="detail-grid" id="profile-detail" hidden>
+        <div class="detail-row">
+          <dt>ID</dt>
+          <dd id="profile-id" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Calling</dt>
+          <dd id="profile-calling">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Level Range</dt>
+          <dd id="profile-level">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Rules</dt>
+          <dd id="profile-rules">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Abilities</dt>
+          <dd id="profile-abilities">—</dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- Row 2: Player / Target / Telemetry -->
+    <section class="card card--player" aria-labelledby="player-heading">
+      <h2 id="player-heading" class="card__title">Player</h2>
+      <div class="unit-info" id="player-info">
+        <p class="unit-name" id="player-name">No player data</p>
+        <p class="unit-meta" id="player-meta"></p>
+      </div>
+      <div class="health-bar" role="meter" aria-label="Player health" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="player-health-meter">
+        <div class="health-bar__fill" id="player-health-fill"></div>
+        <span class="health-bar__text" id="player-health-text">— / —</span>
+      </div>
+      <div class="resource-bar" id="player-resource-section" hidden>
+        <span class="resource-label" id="player-resource-label">Resource</span>
+        <div class="resource-bar__track">
+          <div class="resource-bar__fill" id="player-resource-fill"></div>
+          <span class="resource-bar__text" id="player-resource-text">— / —</span>
+        </div>
+      </div>
+      <p class="unit-cast" id="player-cast" hidden>Casting: <span id="player-cast-text"></span></p>
+    </section>
+
+    <section class="card card--target" aria-labelledby="target-heading">
+      <h2 id="target-heading" class="card__title">Target</h2>
+      <div class="unit-info" id="target-info">
+        <p class="unit-name" id="target-name">No target</p>
+        <p class="unit-meta" id="target-meta"></p>
+      </div>
+      <div class="health-bar health-bar--target" role="meter" aria-label="Target health" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="target-health-meter">
+        <div class="health-bar__fill" id="target-health-fill"></div>
+        <span class="health-bar__text" id="target-health-text">— / —</span>
+      </div>
+      <div class="resource-bar" id="target-resource-section" hidden>
+        <span class="resource-label" id="target-resource-label">Resource</span>
+        <div class="resource-bar__track">
+          <div class="resource-bar__fill" id="target-resource-fill"></div>
+          <span class="resource-bar__text" id="target-resource-text">— / —</span>
+        </div>
+      </div>
+      <p class="unit-cast" id="target-cast" hidden>Casting: <span id="target-cast-text"></span></p>
+    </section>
+
+    <section class="card card--sequence" aria-labelledby="sequence-heading">
+      <h2 id="sequence-heading" class="card__title">Sequence &amp; Timing</h2>
+      <dl class="detail-grid">
+        <div class="detail-row">
+          <dt>Sequence</dt>
+          <dd id="seq-number" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Frame Age</dt>
+          <dd id="seq-age">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Session</dt>
+          <dd id="seq-session" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Last Update</dt>
+          <dd id="seq-last-update">—</dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- Row 3: Event Log (full width) -->
+    <section class="card card--log" aria-labelledby="log-heading">
+      <div class="card__header-row">
+        <h2 id="log-heading" class="card__title">Event Log</h2>
+        <div class="log-controls">
+          <label for="log-filter" class="sr-only">Filter log level</label>
+          <select id="log-filter" class="select select--sm">
+            <option value="all">All</option>
+            <option value="info">Info</option>
+            <option value="warn">Warn</option>
+            <option value="error">Error</option>
+            <option value="debug">Debug</option>
+          </select>
+          <button type="button" class="btn btn--sm btn--ghost" id="btn-clear-log" aria-label="Clear log">Clear</button>
+          <label class="check-label check-label--sm">
+            <input type="checkbox" id="log-autoscroll" checked />
+            Auto-scroll
+          </label>
+        </div>
+      </div>
+      <div class="log-container" id="log-container" role="log" aria-live="polite" aria-relevant="additions" tabindex="0">
+        <p class="log-empty" id="log-empty">Waiting for events…</p>
+      </div>
+    </section>
+  </main>
+
+  <div class="sse-indicator" id="sse-indicator" aria-live="polite" title="SSE connection status">
+    <span class="sse-dot" id="sse-dot"></span>
+    <span class="sr-only" id="sse-status-text">SSE disconnected</span>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

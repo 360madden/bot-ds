@@ -1,7 +1,7 @@
 ---
 description: Integrates independently implemented components and fixes cross-project contract failures.
 mode: subagent
-model: opencode/gpt-5.6-sol
+model: openai/gpt-5.6-sol
 variant: high
 permission:
   edit: allow

@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://botds.local/schemas/combat-profile.json",
+  "title": "BotDs Combat Profile",
+  "description": "Schema for BotDs combat profiles. A profile defines which abilities to use and under what conditions.",
+  "type": "object",
+  "required": [
+    "id",
+    "profileVersion",
+    "character",
+    "abilities",
+    "rules"
+  ],
+  "properties": {
+    "profileVersion": {
+      "type": "integer",
+      "description": "Profile schema version. Must be 1.",
+      "const": 1
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Whether the profile may be armed.",
+      "default": true
+    },
+    "id": {
+      "type": "string",
+      "description": "Unique profile identifier.",
+      "minLength": 1
+    },
+    "character": {
+      "type": "object",
+      "description": "Character requirements for this profile.",
+      "required": ["calling"],
+      "properties": {
+        "calling": {
+          "type": "string",
+          "description": "Required calling (class), e.g. 'Warrior'.",
+          "minLength": 1
+        },
+        "minimumLevel": {
+          "type": "integer",
+          "description": "Minimum character level.",
+          "minimum": 1,
+          "maximum": 75
+        },
+        "maximumLevel": {
+          "type": "integer",
+          "description": "Maximum character level.",
+          "minimum": 1,
+          "maximum": 75
+        },
+        "build": {
+          "type": "string",
+          "description": "Optional build/soul label, e.g. 'Paragon'."
+        }
+      },
+      "additionalProperties": false
+    },
+    "abilities": {
+      "type": "object",
+      "description": "Map of ability aliases to ability bindings. Keys are short aliases used in rules.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["abilityId", "key"],
+        "properties": {
+          "abilityId": {
+            "type": "string",
+            "description": "RIFT ability identifier."
+          },
+          "key": {
+            "type": "string",
+            "description": "Keyboard key binding, e.g. 'F1' or '1'."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this ability binding is active.",
+            "default": true
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether this ability is required for the profile to function.",
+            "default": true
+          },
+          "minimumLevel": {
+            "type": "integer",
+            "description": "Minimum character level for this ability.",
+            "minimum": 1,
+            "maximum": 75
+          },
+          "maximumLevel": {
+            "type": "integer",
+            "description": "Maximum character level for this ability.",
+            "minimum": 1,
+            "maximum": 75
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "rules": {
+      "type": "array",
+      "description": "Ordered list of combat rules evaluated in sequence. The first matching rule fires.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "ability"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique rule identifier."
+          },
+          "ability": {
+            "type": "string",
+            "description": "Ability alias referencing an entry in the abilities map."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this rule is active.",
+            "default": true
+          },
+          "acknowledgement": {
+            "type": "string",
+            "description": "How the action is acknowledged.",
+            "enum": ["cast", "cooldown", "resource", "aura", "combatEvent"],
+            "default": "cooldown"
+          },
+          "when": {
+            "type": "object",
+            "description": "Conditions that must all be met for the rule to fire.",
+            "properties": {
+              "targetHostile": {
+                "type": "boolean",
+                "description": "Target must be hostile.",
+                "default": true
+              },
+              "targetIsPlayer": {
+                "type": "boolean"
+              },
+              "playerInCombat": {
+                "type": "boolean"
+              },
+              "targetInCombat": {
+                "type": "boolean"
+              },
+              "abilityUsable": {
+                "type": "boolean",
+                "default": true
+              },
+              "abilityInRange": {
+                "type": "boolean",
+                "default": true
+              },
+              "cooldownReady": {
+                "type": "boolean",
+                "default": true
+              },
+              "targetCasting": {
+                "type": "boolean"
+              },
+              "targetCastInterruptible": {
+                "type": "boolean"
+              },
+              "playerHealthBelowPercent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "playerHealthAbovePercent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "targetHealthBelowPercent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "targetHealthAbovePercent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "resourceAtLeast": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "requiredPlayerAuras": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "forbiddenPlayerAuras": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "requiredTargetAuras": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "forbiddenTargetAuras": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,7 +1,7 @@
 ---
 description: Adds adversarial tests, protocol fixtures, failure-path coverage, and regression checks.
 mode: subagent
-model: opencode/north-mini-code-free
+model: opencode-go/deepseek-v4-flash
 variant: high
 permission:
   edit: allow

@@ -6,8 +6,7 @@
       "variant": "high"
     },
     "explore": {
-      "model": "opencode/north-mini-code-free",
-      "variant": "high"
+      "model": "opencode/mimo-v2.5-free"
     }
   },
   "mcp": {

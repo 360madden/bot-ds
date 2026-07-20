@@ -1,0 +1,27 @@
+{
+  "$schema": "../schemas/combat-profile.schema.json",
+  "profileVersion": 1,
+  "enabled": false,
+  "id": "disabled-warrior-45",
+  "character": {
+    "calling": "Warrior",
+    "minimumLevel": 45,
+    "maximumLevel": 45
+  },
+  "abilities": {
+    "placeholder": {
+      "abilityId": "",
+      "key": "",
+      "enabled": false,
+      "required": false
+    }
+  },
+  "rules": [
+    {
+      "id": "disabled-placeholder",
+      "ability": "placeholder",
+      "enabled": false,
+      "when": {}
+    }
+  ]
+}

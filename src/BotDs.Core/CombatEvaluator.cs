@@ -20,15 +20,29 @@ public sealed record EvaluationResult(
     public bool HasAction => Action is not null;
 }
 
-public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge)
+public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge, TimeProvider? timeProvider = null)
 {
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
     public EvaluationResult Evaluate(CombatProfile profile, TelemetryFrame frame)
     {
-        if (!frame.Provider.IsUsable(maximumTelemetryAge))
-            return Stop(StopReason.TelemetryStale, $"Provider is {frame.Provider.Health}; age={frame.Provider.Age.TotalMilliseconds:F0} ms.");
+        if (profile is null)
+            return Stop(StopReason.IntegrityFailure, "Profile is null.");
+        if (!profile.Enabled)
+            return Stop(StopReason.ProfileMismatch, "Profile is disabled.");
+        if (frame is null)
+            return Stop(StopReason.IntegrityFailure, "Frame is null.");
+
+        if (frame.Provider is null)
+            return Stop(StopReason.TelemetryStale, "Provider status is null.");
+        if (!frame.Provider.IsUsable(maximumTelemetryAge, _timeProvider.GetUtcNow()))
+            return Stop(StopReason.TelemetryStale, $"Provider is not healthy and fresh; health={frame.Provider.Health}; truncated={frame.Provider.IsTruncated}; reported age={frame.Provider.Age.TotalMilliseconds:F0} ms.");
+
+        if (profile.Character is null)
+            return Stop(StopReason.ProfileMismatch, "Profile has no character requirements.");
 
         UnitState? player = frame.Player;
-        if (player is null || !player.IsAvailable)
+        if (player is null || player.Health is null || !player.IsAvailable)
             return Stop(StopReason.PlayerUnavailable, "Player state is unavailable.");
         if (player.Health.IsDead)
             return Stop(StopReason.PlayerDead, "Player health is zero.");
@@ -36,21 +50,34 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge)
             return Stop(StopReason.ProfileMismatch, mismatch);
 
         UnitState? target = frame.Target;
-        if (target is null || !target.IsAvailable || target.Health.IsDead)
+        if (target is null || target.Health is null || !target.IsAvailable || target.Health.IsDead)
             return new EvaluationResult(ControllerState.WaitingForTarget, null, [], Message: "Waiting for a live selected target.");
         if (!target.IsHostile)
             return new EvaluationResult(ControllerState.WaitingForTarget, null, [], Message: "Selected target is not hostile.");
 
+        if (profile.Abilities is null || profile.Rules is null || frame.Abilities is null)
+            return Stop(StopReason.IntegrityFailure, "Profile has no abilities or rules.");
+
         List<RuleRejection> rejections = [];
         foreach (CombatRule rule in profile.Rules)
         {
+            if (rule is null)
+            {
+                rejections.Add(new RuleRejection("(null)", ["Rule is null."]));
+                continue;
+            }
             if (!rule.Enabled)
             {
                 rejections.Add(new RuleRejection(rule.Id, ["Rule is disabled."]));
                 continue;
             }
 
-            AbilityBinding binding = profile.Abilities[rule.Ability];
+            if (!profile.Abilities.TryGetValue(rule.Ability, out AbilityBinding? binding) || binding is null)
+            {
+                rejections.Add(new RuleRejection(rule.Id, [$"Ability alias '{rule.Ability}' not found in profile."]));
+                continue;
+            }
+
             List<string> reasons = EvaluateRule(rule, binding, frame, player, target);
             if (reasons.Count > 0)
             {
@@ -81,17 +108,34 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge)
         UnitState target)
     {
         List<string> reasons = [];
+        if (binding is null)
+        {
+            reasons.Add("Ability binding is null.");
+            return reasons;
+        }
         if (!binding.Enabled)
             reasons.Add("Ability binding is disabled.");
-        if (player.Level < binding.MinimumLevel || player.Level > binding.MaximumLevel)
-            reasons.Add("Player level is outside the ability binding range.");
-        if (!frame.Abilities.TryGetValue(binding.AbilityId, out AbilityState? ability) || !ability.Available)
+        if (string.IsNullOrWhiteSpace(binding.AbilityId))
         {
-            reasons.Add("Ability is unavailable.");
+            reasons.Add("Ability binding has no abilityId.");
+            return reasons;
+        }
+        if (binding.MinimumLevel.HasValue && player.Level < binding.MinimumLevel)
+            reasons.Add("Player level is below the ability binding minimum.");
+        if (binding.MaximumLevel.HasValue && player.Level > binding.MaximumLevel)
+            reasons.Add("Player level is above the ability binding maximum.");
+        if (!frame.Abilities.TryGetValue(binding.AbilityId, out AbilityState? ability) || ability is null || !ability.Available)
+        {
+            reasons.Add($"Ability '{binding.AbilityId}' is unavailable.");
             return reasons;
         }
 
-        RuleConditions when = rule.When;
+        RuleConditions? when = rule.When;
+        if (when is null)
+        {
+            reasons.Add("Rule has no conditions.");
+            return reasons;
+        }
         CheckBoolean(when.TargetIsPlayer, target.IsPlayer, "Target player classification is unknown or mismatched.", reasons);
         CheckBoolean(when.PlayerInCombat, player.InCombat, "Player combat state is unknown or mismatched.", reasons);
         CheckBoolean(when.TargetInCombat, target.InCombat, "Target combat state is unknown or mismatched.", reasons);
@@ -106,27 +150,66 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge)
             reasons.Add("Ability is not known in range.");
         if (when.CooldownReady && !ability.IsReady)
             reasons.Add("Ability cooldown is not ready.");
-        if (when.ResourceAtLeast is int required && player.Resource?.Current < required)
-            reasons.Add($"Resource is below {required}.");
+        if (when.ResourceAtLeast is int required)
+        {
+            if (player.Resource?.Current is not int current)
+                reasons.Add("Resource is unknown.");
+            else if (current < required)
+                reasons.Add($"Resource is below {required}.");
+        }
 
-        CheckPercent(player.Health.Percent, when.PlayerHealthBelowPercent, when.PlayerHealthAbovePercent, "Player health", reasons);
-        CheckPercent(target.Health.Percent, when.TargetHealthBelowPercent, when.TargetHealthAbovePercent, "Target health", reasons);
-        CheckAuras(frame.PlayerAuras, when.RequiredPlayerAuras, when.ForbiddenPlayerAuras, "player", reasons);
-        CheckAuras(frame.TargetAuras, when.RequiredTargetAuras, when.ForbiddenTargetAuras, "target", reasons);
+        if (player.Health is not null)
+            CheckPercent(player.Health.Percent, when.PlayerHealthBelowPercent, when.PlayerHealthAbovePercent, "Player health", reasons);
+        else
+            reasons.Add("Player health is unknown.");
+        if (target.Health is not null)
+            CheckPercent(target.Health.Percent, when.TargetHealthBelowPercent, when.TargetHealthAbovePercent, "Target health", reasons);
+        else
+            reasons.Add("Target health is unknown.");
+        CheckAuras(frame.PlayerAuras, frame.IsPlayerAurasKnown, when.RequiredPlayerAuras, when.ForbiddenPlayerAuras, "player", reasons);
+        CheckAuras(frame.TargetAuras, frame.IsTargetAurasKnown, when.RequiredTargetAuras, when.ForbiddenTargetAuras, "target", reasons);
         return reasons;
     }
 
     private static bool MatchesCharacter(CharacterRequirements requirements, UnitState player, out string? mismatch)
     {
+        if (requirements is null)
+        {
+            mismatch = "Profile has no character requirements.";
+            return false;
+        }
         if (!string.Equals(requirements.Calling, player.Calling, StringComparison.OrdinalIgnoreCase))
         {
             mismatch = $"Profile calling '{requirements.Calling}' does not match player calling '{player.Calling}'.";
             return false;
         }
-        if (player.Level is null || player.Level < requirements.MinimumLevel || player.Level > requirements.MaximumLevel)
+        if (player.Level is null)
         {
-            mismatch = "Player level is outside the profile range.";
+            mismatch = "Player level is unknown.";
             return false;
+        }
+        if (requirements.MinimumLevel.HasValue && player.Level < requirements.MinimumLevel)
+        {
+            mismatch = $"Player level {player.Level} is below profile minimum {requirements.MinimumLevel}.";
+            return false;
+        }
+        if (requirements.MaximumLevel.HasValue && player.Level > requirements.MaximumLevel)
+        {
+            mismatch = $"Player level {player.Level} is above profile maximum {requirements.MaximumLevel}.";
+            return false;
+        }
+        if (!string.IsNullOrEmpty(requirements.Build))
+        {
+            if (string.IsNullOrEmpty(player.Build))
+            {
+                mismatch = $"Profile requires build '{requirements.Build}' but telemetry reports no build identity.";
+                return false;
+            }
+            if (!string.Equals(requirements.Build, player.Build, StringComparison.OrdinalIgnoreCase))
+            {
+                mismatch = $"Profile build '{requirements.Build}' does not match player build '{player.Build}'.";
+                return false;
+            }
         }
         mismatch = null;
         return true;
@@ -152,17 +235,33 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge)
     }
 
     private static void CheckAuras(
-        IReadOnlyList<AuraState> current,
-        IReadOnlyList<string> required,
-        IReadOnlyList<string> forbidden,
+        IReadOnlyList<AuraState>? current,
+        bool known,
+        IReadOnlyList<string>? required,
+        IReadOnlyList<string>? forbidden,
         string owner,
         List<string> reasons)
     {
-        HashSet<string> ids = current.Select(aura => aura.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (string id in required)
+        bool hasRequired = required is not null && required.Count > 0;
+        bool hasForbidden = forbidden is not null && forbidden.Count > 0;
+
+        if (!hasRequired && !hasForbidden)
+            return;
+
+        if (!known)
+        {
+            reasons.Add($"{owner} aura state is unknown.");
+            return;
+        }
+
+        HashSet<string> ids = (current ?? (IReadOnlyList<AuraState>)[])
+            .Where(aura => aura is not null && !string.IsNullOrWhiteSpace(aura.Id))
+            .Select(aura => aura.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (string id in required!)
             if (!ids.Contains(id))
                 reasons.Add($"Required {owner} aura '{id}' is absent.");
-        foreach (string id in forbidden)
+        foreach (string id in forbidden!)
             if (ids.Contains(id))
                 reasons.Add($"Forbidden {owner} aura '{id}' is present.");
     }

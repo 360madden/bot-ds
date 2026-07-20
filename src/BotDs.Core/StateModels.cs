@@ -57,11 +57,29 @@ public sealed record ProviderStatus(
     string? Fault = null,
     bool IsTruncated = false)
 {
-    public bool IsUsable(TimeSpan maximumAge) =>
-        Health == ProviderHealth.Healthy &&
-        !IsTruncated &&
-        Age >= TimeSpan.Zero &&
-        Age <= maximumAge;
+    public bool IsUsable(TimeSpan maximumAge) => IsUsable(maximumAge, DateTimeOffset.UtcNow);
+
+    public bool IsUsable(TimeSpan maximumAge, DateTimeOffset nowUtc)
+    {
+        if (Health != ProviderHealth.Healthy || IsTruncated || maximumAge < TimeSpan.Zero)
+            return false;
+
+        return TryGetEffectiveAge(nowUtc, out TimeSpan effectiveAge) && effectiveAge <= maximumAge;
+    }
+
+    private bool TryGetEffectiveAge(DateTimeOffset nowUtc, out TimeSpan effectiveAge)
+    {
+        effectiveAge = default;
+        if (Age < TimeSpan.Zero || nowUtc < ReceivedAtUtc)
+            return false;
+
+        TimeSpan elapsed = nowUtc - ReceivedAtUtc;
+        if (Age.Ticks > TimeSpan.MaxValue.Ticks - elapsed.Ticks)
+            return false;
+
+        effectiveAge = TimeSpan.FromTicks(Age.Ticks + elapsed.Ticks);
+        return true;
+    }
 }
 
 public sealed record HealthState(int? Current, int? Maximum)
@@ -101,10 +119,11 @@ public sealed record UnitState(
     HealthState Health,
     ResourceState? Resource,
     bool? InCombat,
-    CastState? Cast)
+    CastState? Cast,
+    string? Build = null)
 {
     public bool IsHostile => string.Equals(Relation, "hostile", StringComparison.OrdinalIgnoreCase);
-    public bool IsAvailable => !string.IsNullOrWhiteSpace(Id) && Health.Maximum is > 0;
+    public bool IsAvailable => !string.IsNullOrWhiteSpace(Id) && Health.Maximum is > 0 && Health.Current is >= 0;
 }
 
 public sealed record AbilityState(
@@ -138,7 +157,9 @@ public sealed record TelemetryFrame(
     UnitState? Target,
     IReadOnlyDictionary<string, AbilityState> Abilities,
     IReadOnlyList<AuraState> PlayerAuras,
-    IReadOnlyList<AuraState> TargetAuras)
+    IReadOnlyList<AuraState> TargetAuras,
+    bool IsPlayerAurasKnown = false,
+    bool IsTargetAurasKnown = false)
 {
     public static TelemetryFrame Empty(DateTimeOffset now) => new(
         new ProviderStatus(ProviderHealth.Disconnected, "", "", 0, 0, now, TimeSpan.MaxValue),
@@ -146,5 +167,7 @@ public sealed record TelemetryFrame(
         null,
         ReadOnlyDictionary<string, AbilityState>.Empty,
         [],
-        []);
+        [],
+        IsPlayerAurasKnown: false,
+        IsTargetAurasKnown: false);
 }

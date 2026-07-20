@@ -12,11 +12,11 @@ Read these files before changing code:
 2. `context/README.md` and every indexed context document
 3. This handoff
 
-## Why A Restart Is Required
+## Agent Runtime Status
 
-The attempted five-agent swarm exposed an OpenCode runtime/database schema mismatch. The running process used OpenCode `1.15.3`, while the shared SQLite schema requires `session_message.seq`. Five child sessions were created, but all failed before receiving their first prompt.
+An earlier five-agent swarm exposed an OpenCode runtime/database schema mismatch. The process used OpenCode `1.15.3`, while the shared SQLite schema required `session_message.seq`.
 
-The database passed `PRAGMA integrity_check`. The global npm package was upgraded successfully to OpenCode `1.18.3`, which matches the newer schema behavior. The currently running OpenCode process still has the old runtime loaded, so subagents must not be retried until after restart.
+The database passed `PRAGMA integrity_check`, and the global package was upgraded to OpenCode `1.18.3`. Subsequent parallel agent, integration, and review sessions completed successfully. Restart OpenCode after changing project agent configuration because configuration is loaded only at process startup.
 
 Related upstream report: <https://github.com/anomalyco/opencode/issues/31204>
 
@@ -70,7 +70,7 @@ The detailed reviewed plan is preserved in the conversation history. The context
 - `CombatProfiles.cs`: versioned profile records, bindings, ordered rules, conditions, acknowledgement types, JSON loading, and semantic validation.
 - `CombatEvaluator.cs`: deterministic ordered evaluation, profile/character checks, current-hostile-target checks, ability readiness, resource/health/aura/cast conditions, action decisions, and rule rejection reasons.
 
-This code is an initial implementation and has not received swarm review or test coverage yet.
+This code has received parallel implementation, integration, adversarial testing, and findings-only review. The remaining limitations are listed below rather than hidden behind placeholder behavior.
 
 ### Context And Research
 
@@ -87,36 +87,64 @@ The following completed successfully after restoring packages:
 ```text
 dotnet restore BotDs.sln
 dotnet build BotDs.sln --no-restore
+dotnet test BotDs.sln --no-build
+dotnet format BotDs.sln --verify-no-changes --no-restore
 ```
 
-Result: zero warnings and zero errors.
-
-There are currently no substantive tests. Run `dotnet test BotDs.sln --no-build` after adding the first test files.
+Result: zero warnings, zero errors, clean formatting, and 192 passing tests.
 
 ## Configured OpenCode Agents
 
-No configured agent has been launched yet. Project-local definitions are under `.opencode/agents/`.
+The configured swarm has been exercised successfully. Project-local definitions are under `.opencode/agents/`.
 
 | Agent | Model | Intended Role |
 | --- | --- | --- |
 | built-in `general` | `opencode-go/deepseek-v4-flash`, high | Fast general implementation |
-| built-in `explore` | `opencode/north-mini-code-free`, high | Free codebase exploration |
-| `architect` | `opencode/gpt-5.6-sol`, xhigh | Read-only architecture decisions |
-| `integrator` | `opencode/gpt-5.6-sol`, high | Cross-project integration |
+| built-in `explore` | `opencode/mimo-v2.5-free` | Free codebase exploration |
+| `architect` | `openai/gpt-5.6-sol`, xhigh | Read-only architecture decisions |
+| `integrator` | `openai/gpt-5.6-sol`, high | Cross-project integration |
 | `protocol-engineer` | `opencode-go/deepseek-v4-pro`, max | Reader, protocol, native interop, and Lua contract |
-| `reviewer` | `opencode/gpt-5.6-sol`, high | Read-only final review |
-| `core-worker` | `opencode/north-mini-code-free`, high | Free isolated C# implementation |
-| `test-worker` | `opencode/north-mini-code-free`, high | Free adversarial tests |
+| `reviewer` | `openai/gpt-5.6-sol`, high | Read-only final review |
+| `core-worker` | `opencode-go/deepseek-v4-flash`, high | Reasoned isolated C# implementation |
+| `test-worker` | `opencode-go/deepseek-v4-flash`, high | Adversarial tests and failure-path reasoning |
+| `simple-worker` | `opencode/mimo-v2.5-free` | Free mechanical edits and established-pattern changes |
 | `dashboard-worker` | `opencode/mimo-v2.5-free` | Free dashboard implementation |
 | `researcher` | `opencode/nemotron-3-ultra-free` | Free read-only research |
 
 Model-routing requirement:
 
-- Higher-reasoning OpenCode agents use only OpenCode's GPT models or OpenCode Go models.
-- Other OpenCode agents use models whose catalog cost is explicitly zero.
+- GPT models are reserved for the high-reasoning architecture, integration, and final-review roles.
+- Non-GPT agents use OpenCode Go models when implementation reasoning is required and catalog-free models for bounded work.
 - This routing rule does not apply to external harnesses such as Codex, Freebuff, or Grok Build.
 
-The merged configuration and agent definitions passed `opencode debug config` and `opencode debug agent ...` validation. Agent configuration is loaded only at process startup.
+The merged configuration and agent definitions passed `opencode debug config` and direct model smoke tests on 2026-07-19. `opencode/north-mini-code-free` and OpenCode Zen's `opencode/gpt-5.6-sol` returned `Model is disabled`, so affected agents were moved to the active routes above. Agent configuration is loaded only at process startup.
+
+## Implemented Baseline After Swarm
+
+- Core profile loading is fail-closed, supports explicit profile disablement, and rejects malformed semantic state.
+- `schemas/combat-profile.schema.json` and a disabled level-45 Warrior placeholder exist without invented game data.
+- Reader v5 defines an integrity-checked double-buffer contract, CRC32, bounded parser, continuity/freshness tracking, and Core telemetry mapping.
+- The Lua bridge emits the provider envelope and heartbeat using Lua-compatible arithmetic; live unit, ability, and aura population still requires current-client conformance work.
+- The App hosts authenticated localhost status/profile/control/SSE endpoints, structured JSONL logs, evaluator plumbing, and a responsive static dashboard.
+- SSE uses authenticated `fetch()` streaming; tokens are not placed in URLs. Empty configured tokens fail closed.
+- No keyboard or other game-action output exists.
+- Provider freshness now ages monotonically at the snapshot boundary, and stale evaluations are rejected across lifecycle and profile-configuration generations.
+- V5 parsing now enforces exact section masks, uniqueness, ordering, schema version, heartbeat contents, and exact section-body consumption.
+- Unknown health and omitted aura telemetry fail closed; explicit empty aura sections remain distinguishable from unknown state.
+- Dashboard API locality uses the remote loopback address, and profile reload requires control authorization.
+- Profile reload is atomic, rejects duplicate IDs, and clears stale profiles when the configured directory disappears.
+- The solution currently has 192 passing Core, protocol, controller, security, profile, and telemetry lifecycle tests.
+
+Verification completed on 2026-07-19:
+
+```text
+dotnet build BotDs.sln --no-restore
+dotnet test BotDs.sln --no-restore
+dotnet format BotDs.sln --verify-no-changes --no-restore
+luac -p addons/BotDsBridge/BotDsBridge/main.lua
+```
+
+The authenticated localhost smoke test returned `401` without a token, loaded the disabled fixture, and rejected arming that fixture.
 
 ## Recommended Swarm After Restart
 
@@ -129,22 +157,20 @@ Launch independent work concurrently with strict path ownership:
 | `general` | App host/services under `src/BotDs.App/**`, excluding `wwwroot` |
 | `test-worker` | `tests/BotDs.Tests/**` |
 | `core-worker` | Core review/fixes plus `profiles/**` and `schemas/**` when explicitly assigned |
+| `simple-worker` | Mechanical edits and established-pattern changes under explicitly assigned paths |
 
 Do not let concurrent agents edit the same project file. Let the primary agent perform package/project-file changes. After workers finish, use `integrator` for the full build and `reviewer` for findings-only final review.
 
 ## Remaining Implementation
 
-1. Review and test the partial Core contracts.
-2. Define one authoritative v5 protocol specification shared by C# and Lua.
-3. Implement CRC, parser, process attachment, memory abstraction, stable/near/full scanning, candidate synchronization, health states, and metrics.
-4. Implement the addon emitter, events, reconciliation, heartbeat, ability/cast/aura state, diagnostics, and protocol health.
-5. Implement application orchestration, profile lifecycle, evaluator loop, acknowledgement tracking, arming, rate limits, and emergency stop.
-6. Implement Serilog bootstrap/final configuration, JSONL application/action/audit logs, correlation, rotation, crash reporting, and dashboard log streaming.
-7. Implement the localhost dashboard, authorization token, strict origin/host validation, SSE, profile controls, run controls, and responsive static UI.
-8. Add profile JSON Schema and a disabled placeholder Warrior fixture until real ability IDs and bindings are supplied.
-9. Add Reader attribution and product/setup documentation.
-10. Add unit, protocol, scanner, evaluator, logging, dashboard, lifecycle, and replay tests.
-11. Run format, restore, build, test, and findings-only review.
+1. Implement Windows process attachment, memory-region enumeration, sentinel scanning, candidate relocation, and scanner metrics.
+2. Populate live addon unit, ability, cast, and aura sections after current-client conformance validation; replace the allocation-heavy emitter representation if profiling requires it.
+3. Add a hosted Reader service that publishes normalized snapshots and preserves the last full snapshot across heartbeat-only frames.
+4. Implement action acknowledgement tracking, rate limits, foreground/focus checks, and emergency-stop input hooks before any keyboard actuator is added.
+5. Add separate action/audit logs, crash envelopes, and authenticated dashboard log streaming.
+6. Add endpoint-level dashboard integration tests plus scanner fixtures and recorded replay tests; malformed protocol, middleware security, profile reload, and controller lifecycle coverage now exist.
+7. Add Reader attribution and product/setup documentation, including dashboard token configuration.
+8. Continue findings-only review after each implementation slice; the 2026-07-19 safety-hardening review was completed and its actionable findings were resolved.
 
 ## Inputs Still Needed
 

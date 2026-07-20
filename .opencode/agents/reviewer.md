@@ -1,7 +1,7 @@
 ---
 description: Performs final high-reasoning review for correctness, regressions, safety failures, and missing tests.
 mode: subagent
-model: opencode/gpt-5.6-sol
+model: openai/gpt-5.6-sol
 variant: high
 permission:
   edit: deny

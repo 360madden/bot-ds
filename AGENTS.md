@@ -1,6 +1,8 @@
 # Repository Status
 
-- This is a new repository with no implementation or verification commands yet. C# and .NET 10 are the selected implementation toolchain; update this file from executable configuration as the project takes shape.
+- The .NET 10 solution contains Core combat/profile contracts, the v5 Reader transport parser, an ASP.NET Core localhost dashboard host, a static dashboard, and xUnit tests.
+- Verify with `dotnet build BotDs.sln --no-restore`, `dotnet test BotDs.sln --no-restore`, and `dotnet format BotDs.sln --verify-no-changes --no-restore` after restoring packages.
+- The Reader process scanner, live addon field population, and action output are not implemented. The application cannot send game input.
 
 # Toolchain Constraints
 

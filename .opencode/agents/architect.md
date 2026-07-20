@@ -1,7 +1,7 @@
 ---
 description: Designs cross-project architecture and resolves difficult contracts before implementation.
 mode: subagent
-model: opencode/gpt-5.6-sol
+model: openai/gpt-5.6-sol
 variant: xhigh
 permission:
   edit: deny

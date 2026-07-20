@@ -14,7 +14,10 @@ public enum AcknowledgementKind
 
 public sealed record CombatProfile
 {
+    [JsonPropertyName("$schema")]
+    public string? Schema { get; init; }
     public int ProfileVersion { get; init; } = 1;
+    public bool Enabled { get; init; } = true;
     public required string Id { get; init; }
     public required CharacterRequirements Character { get; init; }
     public required Dictionary<string, AbilityBinding> Abilities { get; init; }
@@ -114,42 +117,83 @@ public static class CombatProfileLoader
             errors.Add($"Unsupported profileVersion {profile.ProfileVersion}.");
         if (string.IsNullOrWhiteSpace(profile.Id))
             errors.Add("Profile id is required.");
-        if (string.IsNullOrWhiteSpace(profile.Character.Calling))
-            errors.Add("Character calling is required.");
-        if (profile.Character.MinimumLevel is < 1)
-            errors.Add("minimumLevel must be positive.");
-        if (profile.Character.MaximumLevel is < 1)
-            errors.Add("maximumLevel must be positive.");
-        if (profile.Character.MinimumLevel > profile.Character.MaximumLevel)
-            errors.Add("minimumLevel cannot exceed maximumLevel.");
-        if (profile.Abilities.Count == 0)
-            errors.Add("At least one ability binding is required.");
-        if (profile.Rules.Count == 0)
-            errors.Add("At least one combat rule is required.");
-
-        foreach ((string alias, AbilityBinding binding) in profile.Abilities)
+        if (profile.Character is null)
+            errors.Add("Character requirements are required.");
+        else
         {
-            if (string.IsNullOrWhiteSpace(alias))
-                errors.Add("Ability aliases cannot be empty.");
-            if (binding.Enabled && string.IsNullOrWhiteSpace(binding.AbilityId))
-                errors.Add($"Ability '{alias}' requires an abilityId.");
-            if (binding.Enabled && string.IsNullOrWhiteSpace(binding.Key))
-                errors.Add($"Ability '{alias}' requires a key.");
-            if (binding.MinimumLevel > binding.MaximumLevel)
-                errors.Add($"Ability '{alias}' minimumLevel cannot exceed maximumLevel.");
+            if (string.IsNullOrWhiteSpace(profile.Character.Calling))
+                errors.Add("Character calling is required.");
+            if (profile.Character.MinimumLevel is < 1)
+                errors.Add("minimumLevel must be positive.");
+            if (profile.Character.MaximumLevel is < 1)
+                errors.Add("maximumLevel must be positive.");
+            if (profile.Character.MinimumLevel > profile.Character.MaximumLevel)
+                errors.Add("minimumLevel cannot exceed maximumLevel.");
         }
 
-        HashSet<string> ruleIds = new(StringComparer.OrdinalIgnoreCase);
-        foreach (CombatRule rule in profile.Rules)
+        if (profile.Abilities is null || profile.Abilities.Count == 0)
+            errors.Add("At least one ability binding is required.");
+        else
         {
-            if (!ruleIds.Add(rule.Id))
-                errors.Add($"Duplicate rule id '{rule.Id}'.");
-            if (!profile.Abilities.ContainsKey(rule.Ability))
-                errors.Add($"Rule '{rule.Id}' references unknown ability alias '{rule.Ability}'.");
-            ValidatePercent(rule.Id, nameof(rule.When.PlayerHealthBelowPercent), rule.When.PlayerHealthBelowPercent, errors);
-            ValidatePercent(rule.Id, nameof(rule.When.PlayerHealthAbovePercent), rule.When.PlayerHealthAbovePercent, errors);
-            ValidatePercent(rule.Id, nameof(rule.When.TargetHealthBelowPercent), rule.When.TargetHealthBelowPercent, errors);
-            ValidatePercent(rule.Id, nameof(rule.When.TargetHealthAbovePercent), rule.When.TargetHealthAbovePercent, errors);
+            HashSet<string> aliases = new(StringComparer.OrdinalIgnoreCase);
+            foreach ((string alias, AbilityBinding binding) in profile.Abilities)
+            {
+                if (string.IsNullOrWhiteSpace(alias))
+                    errors.Add("Ability aliases cannot be empty.");
+                else if (!aliases.Add(alias))
+                    errors.Add($"Duplicate ability alias '{alias}'.");
+                if (binding is null)
+                {
+                    errors.Add($"Ability '{alias}' binding is null.");
+                    continue;
+                }
+                if (binding.Enabled && string.IsNullOrWhiteSpace(binding.AbilityId))
+                    errors.Add($"Ability '{alias}' requires an abilityId.");
+                if (binding.Enabled && string.IsNullOrWhiteSpace(binding.Key))
+                    errors.Add($"Ability '{alias}' requires a key.");
+                if (binding.MinimumLevel > binding.MaximumLevel)
+                    errors.Add($"Ability '{alias}' minimumLevel cannot exceed maximumLevel.");
+                if (binding.MinimumLevel is < 1 || binding.MaximumLevel is < 1)
+                    errors.Add($"Ability '{alias}' level bounds must be positive.");
+            }
+        }
+
+        if (profile.Rules is null || profile.Rules.Count == 0)
+            errors.Add("At least one combat rule is required.");
+        else
+        {
+            HashSet<string> ruleIds = new(StringComparer.OrdinalIgnoreCase);
+            foreach (CombatRule rule in profile.Rules)
+            {
+                if (rule is null)
+                {
+                    errors.Add("Rule entry is null.");
+                    continue;
+                }
+                if (string.IsNullOrWhiteSpace(rule.Id))
+                    errors.Add("Rule id is required.");
+                if (string.IsNullOrWhiteSpace(rule.Ability))
+                    errors.Add($"Rule '{rule.Id}' ability is required.");
+                if (!ruleIds.Add(rule.Id))
+                    errors.Add($"Duplicate rule id '{rule.Id}'.");
+                if (profile.Abilities is null || !profile.Abilities.ContainsKey(rule.Ability))
+                    errors.Add($"Rule '{rule.Id}' references unknown ability alias '{rule.Ability}'.");
+                if (rule.When is null)
+                    errors.Add($"Rule '{rule.Id}' conditions are required.");
+                else
+                {
+                    ValidatePercent(rule.Id, nameof(rule.When.PlayerHealthBelowPercent), rule.When.PlayerHealthBelowPercent, errors);
+                    ValidatePercent(rule.Id, nameof(rule.When.PlayerHealthAbovePercent), rule.When.PlayerHealthAbovePercent, errors);
+                    ValidatePercent(rule.Id, nameof(rule.When.TargetHealthBelowPercent), rule.When.TargetHealthBelowPercent, errors);
+                    ValidatePercent(rule.Id, nameof(rule.When.TargetHealthAbovePercent), rule.When.TargetHealthAbovePercent, errors);
+                    if (rule.When.ResourceAtLeast is < 0)
+                        errors.Add($"Rule '{rule.Id}' resourceAtLeast cannot be negative.");
+                    ValidateAuraIds(rule.Id, rule.When.RequiredPlayerAuras, nameof(rule.When.RequiredPlayerAuras), errors);
+                    ValidateAuraIds(rule.Id, rule.When.ForbiddenPlayerAuras, nameof(rule.When.ForbiddenPlayerAuras), errors);
+                    ValidateAuraIds(rule.Id, rule.When.RequiredTargetAuras, nameof(rule.When.RequiredTargetAuras), errors);
+                    ValidateAuraIds(rule.Id, rule.When.ForbiddenTargetAuras, nameof(rule.When.ForbiddenTargetAuras), errors);
+                }
+            }
         }
 
         return new ProfileValidationResult(profile, errors);
@@ -159,5 +203,15 @@ public static class CombatProfileLoader
     {
         if (value is < 0 or > 100)
             errors.Add($"Rule '{ruleId}' {field} must be between 0 and 100.");
+    }
+
+    private static void ValidateAuraIds(
+        string ruleId,
+        IReadOnlyList<string>? values,
+        string field,
+        List<string> errors)
+    {
+        if (values is null || values.Any(string.IsNullOrWhiteSpace))
+            errors.Add($"Rule '{ruleId}' {field} must contain non-empty aura ids.");
     }
 }
