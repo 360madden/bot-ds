@@ -32,8 +32,9 @@ The user approved implementation of a Windows x64 combat-only RIFT bot with:
 - A level-45 Warrior only as the first data fixture.
 - Foreground RIFT action output through configured key bindings.
 - A localhost ASP.NET Core dashboard with live state and full local controls.
-- Strong structured logs, UTC/local timestamps, monotonic durations, correlation IDs, rotation, audit logs, crash envelopes, and error boundaries.
-- Explicit user acceptance of current gamigo account risk.
+- Minimal structured local logs, monotonic durations, useful error boundaries, and enough action history to diagnose personal use without collecting credentials or chat content.
+- Personal-tool operation: publisher policy, terms-of-service interpretation, account enforcement, and account-risk acceptance are explicitly not implementation gates or arming confirmations.
+- Privacy remains a requirement: loopback-only control, no credential capture, no chat-content collection, and no unnecessary sensitive identifiers in logs.
 - Movement, pathfinding, and navigation remaining out of scope.
 
 The detailed reviewed plan is preserved in the conversation history. The context documents record source evidence and unresolved runtime validation requirements.
@@ -46,6 +47,14 @@ The detailed reviewed plan is preserved in the conversation history. The context
 - `.cmd` files may be thin convenience wrappers; application logic belongs in C#.
 - Preserve unrelated user or agent changes.
 - Do not commit or push unless explicitly requested.
+
+### Personal Tool Workflow
+
+- Optimize for one local operator, direct functionality, and straightforward maintenance rather than commercial-product operations.
+- Do not spend implementation or review cycles evaluating publisher policy or account enforcement unless the user explicitly asks for that research.
+- Do not add terms/account-risk warnings or acknowledgements to the dashboard or runtime controls.
+- Retain technical input controls that prevent accidental interaction with the wrong process or stale state.
+- Prefer one concise local diagnostic stream over separate application, action, and audit infrastructures unless a concrete debugging need appears.
 
 ## Completed Work
 
@@ -124,6 +133,8 @@ The merged configuration and agent definitions passed `opencode debug config` an
 - Core profile loading is fail-closed, supports explicit profile disablement, and rejects malformed semantic state.
 - `schemas/combat-profile.schema.json` and a disabled level-45 Warrior placeholder exist without invented game data.
 - Reader v5 defines an integrity-checked double-buffer contract, CRC32, bounded parser, continuity/freshness tracking, and Core telemetry mapping.
+- Reader now includes explicit PID/exact-name process selection, minimal-rights Windows x64 attachment, readable-region enumeration, chunked V5 sentinel discovery, protocol-valid candidate ranking, cache invalidation/relocation, structured failures, and privacy-safe scanner metrics.
+- Scanner selection fails closed on incomplete scans, ambiguous candidates, partial reads, stale cached regions without a newer replacement, process loss, and cancellation. Native and sparse-memory tests do not require a live RIFT process.
 - The Lua bridge emits the provider envelope and heartbeat using Lua-compatible arithmetic; live unit, ability, and aura population still requires current-client conformance work.
 - The App hosts authenticated localhost status/profile/control/SSE endpoints, structured JSONL logs, evaluator plumbing, and a responsive static dashboard.
 - SSE uses authenticated `fetch()` streaming; tokens are not placed in URLs. Empty configured tokens fail closed.
@@ -132,8 +143,9 @@ The merged configuration and agent definitions passed `opencode debug config` an
 - V5 parsing now enforces exact section masks, uniqueness, ordering, schema version, heartbeat contents, and exact section-body consumption.
 - Unknown health and omitted aura telemetry fail closed; explicit empty aura sections remain distinguishable from unknown state.
 - Dashboard API locality uses the remote loopback address, and profile reload requires control authorization.
+- Dashboard arming confirms only current technical readiness; it does not request terms or account-risk acknowledgement.
 - Profile reload is atomic, rejects duplicate IDs, and clears stale profiles when the configured directory disappears.
-- The solution currently has 192 passing Core, protocol, controller, security, profile, and telemetry lifecycle tests.
+- The solution currently has 316 passing Core, protocol, scanner/native, controller, security, profile, and telemetry lifecycle tests.
 
 Verification completed on 2026-07-19:
 
@@ -163,14 +175,14 @@ Do not let concurrent agents edit the same project file. Let the primary agent p
 
 ## Remaining Implementation
 
-1. Implement Windows process attachment, memory-region enumeration, sentinel scanning, candidate relocation, and scanner metrics.
-2. Populate live addon unit, ability, cast, and aura sections after current-client conformance validation; replace the allocation-heavy emitter representation if profiling requires it.
-3. Add a hosted Reader service that publishes normalized snapshots and preserves the last full snapshot across heartbeat-only frames.
+1. Resolve the live addon backing-storage invariant: the current immutable Lua string is rebuilt repeatedly, so address stability and stale-copy behavior require runtime validation or a transport redesign before enabling live publication.
+2. Populate live addon unit, ability, cast, and aura sections after current-client conformance validation.
+3. Add a hosted Reader service that publishes normalized snapshots and preserves the last full snapshot across heartbeat-only frames without carrying state across inspection failure, session change, or transport faults.
 4. Implement action acknowledgement tracking, rate limits, foreground/focus checks, and emergency-stop input hooks before any keyboard actuator is added.
-5. Add separate action/audit logs, crash envelopes, and authenticated dashboard log streaming.
-6. Add endpoint-level dashboard integration tests plus scanner fixtures and recorded replay tests; malformed protocol, middleware security, profile reload, and controller lifecycle coverage now exist.
-7. Add Reader attribution and product/setup documentation, including dashboard token configuration.
-8. Continue findings-only review after each implementation slice; the 2026-07-19 safety-hardening review was completed and its actionable findings were resolved.
+5. Add a minimal local action history and useful crash diagnostics without separate production-style audit pipelines or long retention.
+6. Add endpoint-level dashboard integration tests and recorded replay tests; scanner/native fixtures, malformed protocol, middleware security, profile reload, and controller lifecycle coverage now exist.
+7. Add Reader attribution and product/setup documentation, including dashboard token and scanner selector configuration.
+8. Continue findings-only review after each implementation slice; the scanner review was completed and its actionable findings were resolved.
 
 ## Inputs Still Needed
 

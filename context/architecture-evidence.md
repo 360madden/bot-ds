@@ -174,7 +174,7 @@ This table is evidence for planning. It does not select a provider.
 
 ## Planning Questions Preserved
 
-- Which provider is permitted and acceptable for the user's account-risk tolerance?
+- Repository decision (2026-07-19): select providers by technical reliability, maintainability, and privacy. Publisher policy and account-risk tolerance are not implementation criteria for this personal tool.
 - Should the first implementation consume an existing Reader or ChromaLink endpoint rather than modify those projects?
 - What telemetry update rate and maximum age are required for combat?
 - Is a declarative ordered-rule profile sufficient, or is a behavior-tree/runtime scripting layer concretely required?

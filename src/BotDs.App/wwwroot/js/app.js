@@ -90,7 +90,6 @@
   const armDialogForm = $("arm-dialog-form");
   const armDialogCancel = $("arm-dialog-cancel");
   const armDialogConfirm = $("arm-dialog-confirm");
-  const armCheckTos = $("arm-check-tos");
   const armCheckTarget = $("arm-check-target");
   const armCheckReady = $("arm-check-ready");
 
@@ -620,16 +619,15 @@
 
   // ---- Arm dialog ----
   function openArmDialog() {
-    armCheckTos.checked = false;
     armCheckTarget.checked = false;
     armCheckReady.checked = false;
     updateArmConfirm();
     armDialog.showModal();
-    armCheckTos.focus();
+    armCheckTarget.focus();
   }
 
   function updateArmConfirm() {
-    armDialogConfirm.disabled = !(armCheckTos.checked && armCheckTarget.checked && armCheckReady.checked);
+    armDialogConfirm.disabled = !(armCheckTarget.checked && armCheckReady.checked);
   }
 
   // ---- Event wiring ----
@@ -662,7 +660,6 @@
       armDialog.close();
     });
 
-    armCheckTos.addEventListener("change", updateArmConfirm);
     armCheckTarget.addEventListener("change", updateArmConfirm);
     armCheckReady.addEventListener("change", updateArmConfirm);
 

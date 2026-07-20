@@ -4,6 +4,8 @@ This directory preserves product research, historical evidence, current referenc
 
 It is documentation only. It does not approve an implementation architecture or bypass the planning gate in `../AGENTS.md`.
 
+Publisher-policy and account-enforcement references are retained as historical evidence only. The user has explicitly excluded them from implementation gates and recurring workflow warnings. Privacy and local-control requirements remain binding.
+
 ## Reading Order
 
 1. Read `../AGENTS.md` for binding scope and planning constraints.
