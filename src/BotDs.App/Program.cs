@@ -33,6 +33,7 @@ try
     builder.Services.AddSingleton<ProfileService>();
     builder.Services.AddSingleton<ControllerStateMachine>();
     builder.Services.AddSingleton<EvaluatorLoop>();
+    builder.Services.AddSingleton<ArmingReadinessService>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<EvaluatorLoop>());
 
     // ── Settings ─────────────────────────────────────────────

@@ -26,6 +26,7 @@ public static class DashboardEndpoints
         api.MapPost("/control/disarm", Disarm);
         api.MapPost("/control/emergency-stop", EmergencyStop);
         api.MapPost("/control/clear-stop", ClearStop);
+        api.MapGet("/readiness", GetReadiness);
         api.MapGet("/events", StreamEvents);
 
         return builder;
@@ -70,28 +71,20 @@ public static class DashboardEndpoints
 
     private static IResult Arm(
         [FromServices] ControllerStateMachine stateMachine,
-        [FromServices] ProfileService profileService,
-        [FromServices] SnapshotPublisher publisher,
+        [FromServices] ArmingReadinessService readiness,
         [FromServices] IConfiguration configuration,
         [FromServices] ILogger<Program> log)
     {
-        if (profileService.ActiveProfile is not { Enabled: true })
-            return Results.BadRequest(new { Error = "No enabled active profile selected." });
-
-        TelemetryFrame frame = publisher.Latest;
-        TimeSpan maximumAge = TimeSpan.FromMilliseconds(
+        TimeSpan maxAge = TimeSpan.FromMilliseconds(
             configuration.GetValue<int>("BotDs:Evaluator:MaximumTelemetryAgeMs", 5000));
-        if (!frame.Provider.IsUsable(maximumAge))
-            return Results.BadRequest(new { Error = "Telemetry provider is not healthy and fresh." });
-        if (frame.Player is not { IsAvailable: true } player || player.Health.IsDead)
-            return Results.BadRequest(new { Error = "Live player state is required." });
-        if (frame.Target is not { IsAvailable: true, IsHostile: true } target || target.Health.IsDead)
-            return Results.BadRequest(new { Error = "A live hostile selected target is required." });
+        ReadinessResult ready = readiness.Evaluate(maxAge);
+        if (!ready.CanArm)
+            return Results.BadRequest(new { Error = "Readiness check failed.", ready.Blockers });
 
         if (stateMachine.Arm())
         {
             log.LogInformation("Arm requested via dashboard");
-            return Results.Ok(new { Status = "armed" });
+            return Results.Ok(new { Status = "armed", ready.Warnings });
         }
 
         return Results.Conflict(new
@@ -340,4 +333,23 @@ public static class DashboardEndpoints
     }
 
     private sealed record SetProfileRequest(string ProfileId);
+
+    private static IResult GetReadiness(
+        [FromServices] ArmingReadinessService readiness,
+        [FromServices] IConfiguration configuration)
+    {
+        TimeSpan maxAge = TimeSpan.FromMilliseconds(
+            configuration.GetValue<int>("BotDs:Evaluator:MaximumTelemetryAgeMs", 5000));
+        ReadinessResult result = readiness.Evaluate(maxAge);
+        return Results.Json(new
+        {
+            result.CanArm,
+            result.Blockers,
+            Warnings = result.Warnings.Select(w => w.Message).ToList(),
+            ProfileId = result.Profile?.Id,
+            PlayerLevel = result.Frame?.Player?.Level,
+            PlayerCalling = result.Frame?.Player?.Calling,
+            ProviderHealth = result.Frame?.Provider.Health.ToString(),
+        }, JsonOptions);
+    }
 }
