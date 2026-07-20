@@ -169,6 +169,54 @@ public sealed class ArmingReadinessServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Truncated_frame_blocks_arming()
+    {
+        var publisher = new SnapshotPublisher();
+        var truncated = HealthyFrame() with
+        {
+            Provider = HealthyFrame().Provider with { IsTruncated = true },
+        };
+        publisher.Publish(truncated);
+        WriteProfileFile("test-profile", CreateValidProfileJson());
+        var profiles = await CreateProfileService("test-profile");
+        var svc = new ArmingReadinessService(publisher, profiles);
+
+        var result = svc.Evaluate(MaxAge);
+        Assert.False(result.CanArm);
+        Assert.Contains(result.Blockers, b => b.Contains("truncated", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Missing_required_ability_blocks_arming()
+    {
+        var publisher = new SnapshotPublisher();
+        // Frame has ability "1001" but profile requires "9999" (missing) plus "1001"
+        publisher.Publish(HealthyFrame());
+        WriteProfileFile("test-profile", JsonSerializer.Serialize(new
+        {
+            id = "test-profile",
+            profileVersion = 1,
+            enabled = true,
+            character = new { calling = "Warrior", minimumLevel = 40, maximumLevel = 60 },
+            abilities = new Dictionary<string, object>
+            {
+                ["slice"] = new { abilityId = "1001", key = "1", enabled = true, required = true },
+                ["bash"] = new { abilityId = "9999", key = "2", enabled = true, required = true },
+            },
+            rules = new[]
+            {
+                new { id = "r1", ability = "slice", enabled = true },
+            },
+        }));
+        var profiles = await CreateProfileService("test-profile");
+        var svc = new ArmingReadinessService(publisher, profiles);
+
+        var result = svc.Evaluate(MaxAge);
+        Assert.False(result.CanArm);
+        Assert.Contains(result.Blockers, b => b.Contains("9999"));
+    }
+
+    [Fact]
     public async Task Healthy_state_passes_all_checks()
     {
         var publisher = new SnapshotPublisher();

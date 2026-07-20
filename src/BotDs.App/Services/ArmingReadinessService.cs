@@ -143,6 +143,32 @@ public sealed class ArmingReadinessService
             warnings.Add(new ArmingWarning("Ability inventory is unknown — ability conditions may not evaluate."));
         }
 
+        // Required ability reconciliation — ensure all required enabled bindings are present
+        if (profile.Abilities is not null && frame.Abilities is not null)
+        {
+            int playerLevel = player?.Level ?? 0;
+            foreach ((string alias, AbilityBinding binding) in profile.Abilities)
+            {
+                if (binding is not { Enabled: true, Required: true }) continue;
+                if (!IsLevelInRange(binding, playerLevel)) continue;
+                if (string.IsNullOrWhiteSpace(binding.AbilityId))
+                {
+                    blockers.Add($"Required ability '{alias}' has no abilityId.");
+                    continue;
+                }
+                if (!frame.IsAbilitiesKnown)
+                {
+                    warnings.Add(new ArmingWarning("Required ability check skipped — ability inventory is unknown."));
+                    continue;
+                }
+                if (!frame.Abilities.TryGetValue(binding.AbilityId, out var ability)
+                    || ability is null || !ability.Available)
+                {
+                    blockers.Add($"Required ability '{binding.AbilityId}' (alias: {alias}) is not available in telemetry.");
+                }
+            }
+        }
+
         if (!frame.IsPlayerAurasKnown)
         {
             warnings.Add(new ArmingWarning("Player aura state is unknown — aura conditions may not evaluate."));
@@ -159,6 +185,14 @@ public sealed class ArmingReadinessService
             warnings,
             profile,
             frame);
+    }
+
+    private static bool IsLevelInRange(AbilityBinding binding, int playerLevel)
+    {
+        if (playerLevel <= 0) return true; // level unknown — let evaluator handle it
+        if (binding.MinimumLevel.HasValue && playerLevel < binding.MinimumLevel.Value) return false;
+        if (binding.MaximumLevel.HasValue && playerLevel > binding.MaximumLevel.Value) return false;
+        return true;
     }
 }
 
