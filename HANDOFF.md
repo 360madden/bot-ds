@@ -1,6 +1,6 @@
 # Implementation Handoff
 
-Last updated: 2026-07-20
+Last updated: 2026-07-20 (Session 2026-07-20b)
 
 ## Resume Instruction
 
@@ -100,7 +100,7 @@ dotnet test BotDs.sln --no-build
 dotnet format BotDs.sln --verify-no-changes --no-restore
 ```
 
-Result: zero warnings, zero errors, clean formatting, and 378 passing tests.
+Result: zero warnings, zero errors, and 510 passing tests.
 
 ## Configured OpenCode Agents
 
@@ -159,18 +159,14 @@ The merged configuration and agent definitions passed `opencode debug config` an
 - Native error mapping (`MapWin32Error`) wired for `VerifyName` failures, with test coverage.
 - `schemas/combat-profile.schema.json` updated with `character.build` condition, `required` per-binding field, and extended conditions.
 - `addons/BotDsBridge/PROTOCOL.md` contains the normative wire-format specification with byte offsets, section encoding, CRC rules, double-buffer discipline, and health mapping.
-- The solution currently has 378 passing Core, protocol, scanner/native, controller, security, profile, and telemetry lifecycle tests.
+- The solution currently has 510 passing Core, protocol, scanner/native, controller, security, profile, telemetry, pipeline, evaluator, and action-coordinator tests.
 
-Verification completed on 2026-07-20:
+Last verified on 2026-07-20 (Session 2026-07-20b):
 
 ```text
-dotnet build BotDs.sln --no-restore
-dotnet test BotDs.sln --no-restore
-dotnet format BotDs.sln --verify-no-changes --no-restore
-luac -p addons/BotDsBridge/BotDsBridge/main.lua
+dotnet build BotDs.sln --no-restore   → 0e 0w
+dotnet test BotDs.sln --no-restore    → 510/510 pass
 ```
-
-The authenticated localhost smoke test returned `401` without a token, loaded the disabled fixture, and rejected arming that fixture.
 
 ## Recommended Swarm After Restart
 
@@ -228,18 +224,58 @@ Despite Lua strings being immutable and the addon rebuilding the buffer on every
 | Stable storage finding | `docs/m1-stable-storage-finding.md` |
 | Populated live addon (game-state sections) | `addons/BotDsBridge/BotDsBridge/main.lua` |
 | Hosted scanner loop | `src/BotDs.App/Services/TelemetryReaderLoop.cs` |
-| Scanner dashboard card | `src/BotDs.App/wwwroot/index.html` + `js/app.js` |
+| Scanner dashboard card | `src/BotDs.App/wwwroot/index.html` + `js/app.js` |## Session 2026-07-20b: Pipeline & Evaluator Integration Tests
+
+### Commits (7 total this session)
+
+| Commit | What |
+|--------|------|
+| `20db66c` | UI bug hunt: 7 CSS/HTML fixes (coordinator full-width, settings form CSS, badge overflow, mobile responsive) |
+| `e9162f2` | JS audit: 8 bug fixes (sessionStorage crash, apiFetch 204 crash, null DOM refs, race conditions, CSS class sanitize) |
+| `bcb3f2e` | 8 pipeline integration tests (scanner → loop → publisher chain) |
+| `210bc4b` | Player data propagation test + V5 UnitState binary encoding helpers |
+| `86bfd2f` | Target data + heartbeat carry-forward pipeline tests |
+| (latest) | 9 EvaluatorLoop integration tests (telemetry → evaluation → coordination bridge) |
+| `89b540c` | Refactor: extract shared BuildSlotWithUnit, eliminate 45 lines of duplication |
+| `bd4e96b` | ActionCoordinator startup-Disabled enforcement test (M8 safety gate) |
+
+### New Test Files Created
+
+- `tests/BotDs.Tests/PipelineIntegrationTests.cs` — 11 tests covering scanner→publisher chain, player data, target data, heartbeat carry-forward, process exit, fault handling
+- `tests/BotDs.Tests/EvaluatorLoopTests.cs` — 9 tests covering disarmed/stopped skip, emergency stop on null profile, evaluation with coordinator delegation, fault handling, cancellation, generation guards, multi-frame evaluation
+
+### New V5 Binary Helpers (in ScannerTestHelpers)
+
+- `BuildUnitSection(...)` — encodes ParsedUnitState into V5 binary wire format matching V5Parser.ParseUnitState (16 fields in parser order)
+- `BuildSlotWithPlayer(...)` — complete V5 slot with ProviderInfo + Player sections
+- `BuildSlotWithTarget(...)` — complete V5 slot with ProviderInfo + Target sections
+- `BuildSlotWithUnit(...)` — shared implementation extracted from the above two
+- `WriteSectionHeader(...)`, `WriteLenPrefixedAscii(...)`, `WriteLenPrefixedUtf8(...)` — low-level V5 encoding helpers
+
+### Architecture Status
+
+All M0-M7 milestones are complete. M8 (Closed-Loop Live Combat) is active. Code-level work remaining:
+
+- Profile-declared acknowledgement validation (verify unsupported AcknowledgementKind values rejected at profile load time)
+- Any missing edge-case tests discovered during live testing
+
+### What Requires Live RIFT Client
+
+Items 3-12 of M8 require the game running with the BotDs addon: key calibration, binding verification, typed acknowledgement testing, failure scenario exercise, and 30-minute combat soak. The code infrastructure is ready.
 
 ## Remaining Implementation
-The authoritative sequence and exit criteria are in `ROADMAP.md`. The active milestone is M1: transport and current-client conformance.
 
-**M1 status: Transport decided (V5 process memory). Remaining M1 work:**
-1. Run populated addon + V5 scanner against live RIFT client
-2. Verify sentinel discovery, parse live frames, confirm cache hit rate
-3. Populate field/event matrix from live conformance probe data
-4. Measure actual payload sizes, ability/aura counts, update cadence
-5. Run 30-min 20 Hz soak test
-6. Freeze production protocol contract and update PLAN.md/ROADMAP.md
+The authoritative sequence and exit criteria are in `ROADMAP.md`. The active milestone is M8: Closed-Loop Live Combat. All M0-M7 milestones are complete.
+
+**M8 code-only work remaining:**
+1. Profile-declared acknowledgement validation in CombatProfileLoader.Validate
+
+**M8 requires live RIFT client for:**
+1. Key calibration and binding verification
+2. Typed acknowledgement testing (cast, cooldown, resource, aura, combat event)
+3. Failure scenario exercise (death, focus loss, alt-tab, target switch, etc.)
+4. 30-minute combat soak with 200+ acknowledged dispatches
+5. M9: Final acceptance, packaging, performance testing, documentation
 
 ## Inputs Still Needed
 
