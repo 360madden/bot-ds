@@ -7,6 +7,7 @@ public sealed class EvaluatorLoop : BackgroundService
     private readonly SnapshotPublisher _publisher;
     private readonly ProfileService _profiles;
     private readonly ControllerStateMachine _stateMachine;
+    private readonly ActionCoordinator? _actionCoordinator;
     private readonly ILogger<EvaluatorLoop> _log;
     private readonly TimeSpan _maxTelemetryAge;
     private readonly TimeSpan _evaluationInterval;
@@ -18,11 +19,13 @@ public sealed class EvaluatorLoop : BackgroundService
         ProfileService profiles,
         ControllerStateMachine stateMachine,
         IConfiguration configuration,
-        ILogger<EvaluatorLoop> log)
+        ILogger<EvaluatorLoop> log,
+        ActionCoordinator? actionCoordinator = null)
     {
         _publisher = publisher;
         _profiles = profiles;
         _stateMachine = stateMachine;
+        _actionCoordinator = actionCoordinator;
         _log = log;
         _maxTelemetryAge = TimeSpan.FromMilliseconds(
             configuration.GetValue<int>("BotDs:Evaluator:MaximumTelemetryAgeMs", 5000));
@@ -71,10 +74,22 @@ public sealed class EvaluatorLoop : BackgroundService
                 {
                     lock (_resultLock) _lastResult = result;
 
-                    if (result.HasAction)
+                    // Delegate dispatch to ActionCoordinator (M6+)
+                    if (result.HasAction && _actionCoordinator is not null)
                     {
+                        DispatchRecord? dispatch = _actionCoordinator.Consume(result, generation);
+                        if (dispatch is not null)
+                        {
+                            _log.LogInformation(
+                                "Dispatch {Outcome}: Rule={RuleId}, Ability={AbilityId}, Key={Key}, Detail={Detail}",
+                                dispatch.Outcome, dispatch.RuleId, dispatch.AbilityId, dispatch.Key, dispatch.Detail ?? "—");
+                        }
+                    }
+                    else if (result.HasAction && _actionCoordinator is null)
+                    {
+                        // Legacy path before ActionCoordinator is wired
                         _log.LogInformation(
-                            "Action pending: Rule={RuleId}, Ability={AbilityId}, Key={Key}, Ack={Ack}, Seq={Seq}",
+                            "Action pending (no coordinator): Rule={RuleId}, Ability={AbilityId}, Key={Key}, Ack={Ack}, Seq={Seq}",
                             result.Action!.RuleId,
                             result.Action.AbilityId,
                             result.Action.Key,

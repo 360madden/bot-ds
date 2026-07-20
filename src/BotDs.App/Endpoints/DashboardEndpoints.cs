@@ -27,6 +27,7 @@ public static class DashboardEndpoints
         api.MapPost("/control/emergency-stop", EmergencyStop);
         api.MapPost("/control/clear-stop", ClearStop);
         api.MapGet("/readiness", GetReadiness);
+        api.MapPost("/control/output-mode", SetOutputMode);
         api.MapGet("/events", StreamEvents);
 
         return builder;
@@ -296,6 +297,12 @@ public static class DashboardEndpoints
             frame.Player,
             frame.Target,
             ActiveProfileId = profileService.ActiveProfileId,
+            Coordinator = readerLoop is not null
+                ? new
+                {
+                    // Coordinator info added when ActionCoordinator is available (M6)
+                }
+                : null,
         };
     }
 
@@ -333,6 +340,7 @@ public static class DashboardEndpoints
     }
 
     private sealed record SetProfileRequest(string ProfileId);
+    private sealed record SetOutputModeRequest(string? Mode);
 
     private static IResult GetReadiness(
         [FromServices] ArmingReadinessService readiness,
@@ -351,5 +359,34 @@ public static class DashboardEndpoints
             PlayerCalling = result.Frame?.Player?.Calling,
             ProviderHealth = result.Frame?.Provider.Health.ToString(),
         }, JsonOptions);
+    }
+
+    private static IResult SetOutputMode(
+        [FromBody] SetOutputModeRequest request,
+        [FromServices] ActionCoordinator coordinator,
+        [FromServices] ControllerStateMachine stateMachine,
+        [FromServices] IConfiguration configuration,
+        [FromServices] ILogger<Program> log)
+    {
+        if (request.Mode is null)
+            return Results.BadRequest(new { Error = "Output mode is required (disabled, dryRun, live)." });
+
+        if (!Enum.TryParse<OutputMode>(request.Mode, ignoreCase: true, out var mode))
+            return Results.BadRequest(new { Error = $"Invalid output mode '{request.Mode}'. Valid: disabled, dryRun, live." });
+
+        IDisposable? lease = stateMachine.TryBeginConfiguration();
+        if (lease is null && mode != OutputMode.Disabled)
+            return Results.Conflict(new { Error = "Disarm before changing output mode." });
+
+        using (lease)
+        {
+            TimeSpan maxAge = TimeSpan.FromMilliseconds(
+                configuration.GetValue<int>("BotDs:Evaluator:MaximumTelemetryAgeMs", 5000));
+            if (!coordinator.TrySetMode(mode, maxAge))
+                return Results.BadRequest(new { Error = "Failed to set output mode. Check readiness." });
+
+            log.LogInformation("Output mode set to {Mode} via dashboard", mode);
+            return Results.Ok(new { OutputMode = mode.ToString() });
+        }
     }
 }

@@ -34,6 +34,7 @@ try
     builder.Services.AddSingleton<ControllerStateMachine>();
     builder.Services.AddSingleton<EvaluatorLoop>();
     builder.Services.AddSingleton<ArmingReadinessService>();
+    builder.Services.AddSingleton<ActionCoordinator>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<EvaluatorLoop>());
 
     // ── Settings ─────────────────────────────────────────────
