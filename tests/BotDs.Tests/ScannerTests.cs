@@ -251,6 +251,142 @@ internal static class ScannerTestHelpers
         V5Crc32.WriteCrc(slot, payloadLength: 0);
         return slot;
     }
+
+    /// <summary>
+    /// Build a complete V5 buffer slot with ProviderInfo + optional Player section.
+    /// Sections are written in ascending mask order (ProviderInfo=0x01, Player=0x02).
+    /// </summary>
+    public static byte[] BuildSlotWithPlayer(
+        uint sequence, Guid sessionId,
+        string playerName, int level, string calling,
+        byte unitFlags, byte relation,
+        int healthCur, int healthMax,
+        uint producerFrameMs = 0, uint maxAgeMs = 500)
+    {
+        byte[] slot = new byte[V5Constants.BufferSlotSize];
+        slot[V5Constants.HdrProtocolVersionOffset] = V5Constants.ProtocolVersion;
+        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrSequenceOffset), sequence);
+        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrProducerFrameMsOffset), producerFrameMs);
+
+        // Build ProviderInfo section (same as BuildSlot)
+        byte[] provider = new byte[28];
+        sessionId.TryWriteBytes(provider);
+        BitConverter.TryWriteBytes(provider.AsSpan(16), producerFrameMs);
+        BitConverter.TryWriteBytes(provider.AsSpan(20), maxAgeMs);
+        provider[26] = 1; // schema version
+        provider[27] = 0; // reserved
+
+        // Build Player UnitState section
+        byte[] playerSection = BuildUnitSection(
+            id: "player1", name: playerName, level: level, calling: calling,
+            flags: unitFlags, relation: relation,
+            healthCur: healthCur, healthMax: healthMax);
+
+        // Write sections in ascending mask order: ProviderInfo (0x01) then Player (0x02)
+        int offset = V5Constants.PayloadOffset;
+        offset = WriteSectionHeader(slot, offset, V5Constants.SectionTypeProviderInfo, provider);
+        offset = WriteSectionHeader(slot, offset, V5Constants.SectionTypePlayer, playerSection);
+
+        uint payloadLength = (uint)(offset - V5Constants.PayloadOffset);
+        uint sectionsMask = V5Constants.MaskProviderInfo | V5Constants.MaskPlayer;
+        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrSectionsMaskOffset), sectionsMask);
+        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrPayloadLengthOffset), payloadLength);
+        V5Crc32.WriteCrc(slot, payloadLength);
+        return slot;
+    }
+
+    /// <summary>
+    /// Encode a UnitState into the V5 binary wire format matching V5Parser.ParseUnitState.
+    /// Wire layout (all little-endian):
+    ///   Id:       ushort length + ASCII bytes
+    ///   Name:     ushort length + UTF8 bytes
+    ///   Level:    int32
+    ///   Calling:  ushort length + ASCII bytes
+    ///   Flags:    byte
+    ///   Relation: byte
+    ///   Health:   int32 current + int32 max
+    ///   Resource: int32 current + int32 max
+    ///   ResKind:  ushort length + ASCII bytes
+    ///   CastId:   ushort length + ASCII bytes
+    ///   CastName: ushort length + UTF8 bytes
+    ///   CastRemain: int32
+    ///   CastDur: int32
+    ///   CastFlags: byte
+    /// </summary>
+    public static byte[] BuildUnitSection(
+        string? id = null, string? name = null, int level = 0, string? calling = null,
+        byte flags = 0, byte relation = 0,
+        int healthCur = -1, int healthMax = -1,
+        int resCur = -1, int resMax = -1, string? resKind = null,
+        string? castId = null, string? castName = null,
+        int castRemain = -1, int castDur = -1, byte castFlags = 0)
+    {
+        var buf = new List<byte>();
+
+        // Id (ASCII, length-prefixed)
+        WriteLenPrefixedAscii(buf, id);
+        // Name (UTF8, length-prefixed)
+        WriteLenPrefixedUtf8(buf, name);
+        // Level
+        buf.AddRange(BitConverter.GetBytes(level));
+        // Calling (ASCII, length-prefixed)
+        WriteLenPrefixedAscii(buf, calling);
+        // Flags, Relation
+        buf.Add(flags);
+        buf.Add(relation);
+        // Health
+        buf.AddRange(BitConverter.GetBytes(healthCur));
+        buf.AddRange(BitConverter.GetBytes(healthMax));
+        // Resource
+        buf.AddRange(BitConverter.GetBytes(resCur));
+        buf.AddRange(BitConverter.GetBytes(resMax));
+        // ResourceKind (ASCII, length-prefixed)
+        WriteLenPrefixedAscii(buf, resKind);
+        // CastAbilityId (ASCII, length-prefixed)
+        WriteLenPrefixedAscii(buf, castId);
+        // CastName (UTF8, length-prefixed)
+        WriteLenPrefixedUtf8(buf, castName);
+        // Cast timing
+        buf.AddRange(BitConverter.GetBytes(castRemain));
+        buf.AddRange(BitConverter.GetBytes(castDur));
+        // CastFlags
+        buf.Add(castFlags);
+
+        return [.. buf];
+    }
+
+    private static void WriteLenPrefixedAscii(List<byte> buf, string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            buf.AddRange(BitConverter.GetBytes((ushort)0));
+            return;
+        }
+        byte[] bytes = System.Text.Encoding.ASCII.GetBytes(text);
+        buf.AddRange(BitConverter.GetBytes((ushort)bytes.Length));
+        buf.AddRange(bytes);
+    }
+
+    private static void WriteLenPrefixedUtf8(List<byte> buf, string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            buf.AddRange(BitConverter.GetBytes((ushort)0));
+            return;
+        }
+        byte[] bytes = System.Text.Encoding.UTF8.GetBytes(text);
+        buf.AddRange(BitConverter.GetBytes((ushort)bytes.Length));
+        buf.AddRange(bytes);
+    }
+
+    /// <summary>Write a TLV section header and data at the given offset. Returns next offset.</summary>
+    private static int WriteSectionHeader(byte[] slot, int offset, ushort sectionType, byte[] data)
+    {
+        BitConverter.TryWriteBytes(slot.AsSpan(offset), sectionType);
+        BitConverter.TryWriteBytes(slot.AsSpan(offset + 2), (ushort)data.Length);
+        data.CopyTo(slot, offset + V5Constants.SectionHeaderSize);
+        return offset + V5Constants.SectionHeaderSize + data.Length;
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────

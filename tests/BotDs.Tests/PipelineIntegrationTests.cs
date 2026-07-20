@@ -55,6 +55,46 @@ public sealed class PipelineIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task Pipeline_publishes_player_data()
+    {
+        var session = Guid.NewGuid();
+        byte[] playerSlot = ScannerTestHelpers.BuildSlotWithPlayer(
+            sequence: 2, sessionId: session,
+            playerName: "TestWarrior", level: 45, calling: "Warrior",
+            unitFlags: V5Constants.UnitFlagIsPlayer | V5Constants.UnitFlagIsAvailable,
+            relation: V5Constants.RelationFriendly,
+            healthCur: 3500, healthMax: 5000,
+            producerFrameMs: 0);
+
+        var catalog = new FakeMemoryCatalog();
+        ScannerTestHelpers.PlaceV5Region(catalog, 0x1000000,
+            sessionId: session, seqA: 1, seqB: 2,
+            slotBOverride: playerSlot);
+        var factory = new FakeMemoryReaderFactory();
+        factory.RegisterProcess(42, catalog);
+        var scanner = new V5ScannerService(
+            new ProcessSelector { ProcessId = 42 }, MaxAge, readerFactory: factory);
+        _scanners.Add(scanner);
+
+        var (publisher, _) = await RunLoopAsync(scanner, delayMs: 200);
+
+        TelemetryFrame frame = publisher.Latest;
+        Assert.Equal(ProviderHealth.Healthy, frame.Provider.Health);
+        Assert.Equal(session, Guid.Parse(frame.Provider.SessionId));
+
+        // Player data propagated through the full pipeline
+        Assert.NotNull(frame.Player);
+        Assert.Equal("TestWarrior", frame.Player.Name);
+        Assert.Equal(45, frame.Player.Level);
+        Assert.Equal("Warrior", frame.Player.Calling);
+        Assert.True(frame.Player.IsPlayer);
+        Assert.False(frame.Player.InCombat);
+        Assert.Equal(3500, frame.Player.Health.Current);
+        Assert.Equal(5000, frame.Player.Health.Maximum);
+        Assert.Equal("friendly", frame.Player.Relation);
+    }
+
+    [Fact]
     public async Task Pipeline_fault_produces_disconnected_frame()
     {
         // Scanner with unregistered PID → immediate failure
