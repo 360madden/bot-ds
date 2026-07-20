@@ -21,14 +21,22 @@
 
   // ---- Token management ----
   function getToken() {
-    return sessionStorage.getItem("botds-token") || "";
+    try {
+      return sessionStorage.getItem("botds-token") || "";
+    } catch {
+      return "";
+    }
   }
 
   function setToken(token) {
-    if (token) {
-      sessionStorage.setItem("botds-token", token);
-    } else {
-      sessionStorage.removeItem("botds-token");
+    try {
+      if (token) {
+        sessionStorage.setItem("botds-token", token);
+      } else {
+        sessionStorage.removeItem("botds-token");
+      }
+    } catch {
+      // sessionStorage unavailable (private browsing etc.) — silent ignore
     }
   }
 
@@ -51,9 +59,13 @@
       const text = await resp.text().catch(() => "");
       throw new Error("HTTP " + resp.status + ": " + (text || resp.statusText));
     }
+    // 204 No Content has no body — return null
+    if (resp.status === 204) return null;
     const ct = resp.headers.get("content-type") || "";
     if (ct.includes("application/json")) {
-      return resp.json();
+      const text = await resp.text();
+      if (!text || !text.trim()) return null;
+      return JSON.parse(text);
     }
     return resp.text();
   }
@@ -309,6 +321,9 @@
     var castEl = $(prefix + "-cast");
     var castTextEl = $(prefix + "-cast-text");
 
+    // Bail if any required element is missing
+    if (!nameEl || !metaEl || !healthMeter || !healthFill || !healthText) return;
+
     if (!unit || !unit.id) {
       nameEl.textContent = prefix === "player" ? "No player data" : "No target";
       metaEl.textContent = "";
@@ -444,6 +459,10 @@
     // Coordinator
     if (status.coordinator) {
       updateCoordinator(status.coordinator);
+    } else {
+      // Coordinator data disappeared — hide sections and clear stale UI
+      setHidden(coordinatorSection, true);
+      setHidden(actionHistorySection, true);
     }
   }
 
@@ -460,7 +479,7 @@
     // Pending action
     if (coord.pendingAction) {
       var pa = coord.pendingAction;
-      setText(coordPending, pa.abilityId + " [" + pa.key + "] rule=" + pa.ruleId);
+      setText(coordPending, (pa.abilityId || "?") + " [" + (pa.key || "?") + "] rule=" + (pa.ruleId || "?"));
     } else {
       setText(coordPending, "—");
     }
@@ -482,7 +501,7 @@
           + '<td class="mono">' + escapeHtml(r.ruleId || "—") + '</td>'
           + '<td>' + escapeHtml(r.abilityId || "—") + '</td>'
           + '<td class="mono">' + escapeHtml(r.key || "—") + '</td>'
-          + '<td><span class="outcome-tag outcome-tag--' + (r.outcome || "").toLowerCase() + '">'
+          + '<td><span class="outcome-tag outcome-tag--' + (r.outcome || "").toLowerCase().replace(/[^a-z0-9-]/g, '-') + '">'
           + escapeHtml((r.outcome || "").replace(/([a-z])([A-Z])/g, "$1 $2")) + '</span></td>'
           + '<td class="detail-cell">' + escapeHtml(r.detail || "—") + '</td></tr>';
       }
@@ -817,9 +836,15 @@
   }
 
   // ---- Status polling (fallback) ----
+  let lastPollSequence = 0;
   async function pollStatus() {
     try {
       var status = await apiFetch(STATUS_ENDPOINT);
+      if (!status) return;
+      // Reject stale poll results — don't overwrite fresher SSE data
+      var pollSeq = (status.provider && status.provider.sequence) || 0;
+      if (pollSeq > 0 && pollSeq < lastPollSequence) return;
+      lastPollSequence = pollSeq;
       applyStatus(status);
     } catch (err) {
       // SSE should cover this; silent fail on poll
@@ -842,6 +867,7 @@
   async function loadSettings() {
     try {
       var s = await apiFetch("/api/settings");
+      s = s || {};
       if (s) {
         var sc = s.scanner || {};
         setScannerInterval.value = sc.readIntervalMs ?? 50;
