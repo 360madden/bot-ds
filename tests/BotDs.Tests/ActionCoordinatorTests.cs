@@ -30,9 +30,13 @@ public sealed class ActionCoordinatorTests : IDisposable
     public void Disabled_mode_rejects_all_actions()
     {
         var (coord, _, _, _, sm) = CreateCoordinator();
+
+        // Startup: coordinator must default to Disabled (M8 safety requirement)
+        Assert.Equal(OutputMode.Disabled, coord.Mode);
+
         var result = CreateHealthyResult();
         var record = coord.Consume(result, sm.Generation);
-        Assert.Null(record); // disabled mode
+        Assert.Null(record); // disabled mode rejects all actions
     }
 
     [Fact]
