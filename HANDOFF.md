@@ -1,6 +1,6 @@
 # Implementation Handoff
 
-Last updated: 2026-07-20 (Session 2026-07-20b)
+Last updated: 2026-07-20 (Session 2026-07-20c)
 
 ## Resume Instruction
 
@@ -100,7 +100,7 @@ dotnet test BotDs.sln --no-build
 dotnet format BotDs.sln --verify-no-changes --no-restore
 ```
 
-Result: zero warnings, zero errors, and 510 passing tests.
+Result: zero warnings, zero errors, and 512 passing tests.
 
 ## Configured OpenCode Agents
 
@@ -159,7 +159,7 @@ The merged configuration and agent definitions passed `opencode debug config` an
 - Native error mapping (`MapWin32Error`) wired for `VerifyName` failures, with test coverage.
 - `schemas/combat-profile.schema.json` updated with `character.build` condition, `required` per-binding field, and extended conditions.
 - `addons/BotDsBridge/PROTOCOL.md` contains the normative wire-format specification with byte offsets, section encoding, CRC rules, double-buffer discipline, and health mapping.
-- The solution currently has 510 passing Core, protocol, scanner/native, controller, security, profile, telemetry, pipeline, evaluator, and action-coordinator tests.
+- The solution currently has 512 passing Core, protocol, scanner/native, controller, security, profile, telemetry, pipeline, evaluator, and action-coordinator tests.
 
 Last verified on 2026-07-20 (Session 2026-07-20b):
 
@@ -267,8 +267,7 @@ Items 3-12 of M8 require the game running with the BotDs addon: key calibration,
 
 The authoritative sequence and exit criteria are in `ROADMAP.md`. The active milestone is M8: Closed-Loop Live Combat. All M0-M7 milestones are complete.
 
-**M8 code-only work remaining:**
-1. Profile-declared acknowledgement validation in CombatProfileLoader.Validate
+**M8 code-only work:** All complete. Acknowledgement kind validation added in Session 2026-07-20c.
 
 **M8 requires live RIFT client for:**
 1. Key calibration and binding verification
@@ -276,6 +275,79 @@ The authoritative sequence and exit criteria are in `ROADMAP.md`. The active mil
 3. Failure scenario exercise (death, focus loss, alt-tab, target switch, etc.)
 4. 30-minute combat soak with 200+ acknowledged dispatches
 5. M9: Final acceptance, packaging, performance testing, documentation
+
+## Session 2026-07-20c: M8 Code Completion + M9 Prep
+
+### Commits
+
+| Commit | What |
+|--------|------|
+| `434e49e` | Acknowledgement kind validation in profile loader (M8 per PLAN.md §8) — 2 new tests |
+| (latest) | Dashboard 404 fix + AGENTS.md stale claims update |
+
+### Changes
+
+- **Dashboard 404 fix**: Added `app.MapFallbackToFile("index.html")` to Program.cs so root URL serves the dashboard
+- **AGENTS.md updated**: Removed stale "not implemented" claims — TelemetryReaderLoop, V5ScannerService, ActionCoordinator, and WindowsKeySink are all complete
+- **Win-x64 publish**: `dotnet publish src/BotDs.App/BotDs.App.csproj -c Release -r win-x64 --self-contained false -o publish/`
+
+### Live Verification (Scanner + Dashboard)
+
+- BotDsBridge addon installed to `C:\Program Files (x86)\Glyph\Games\RIFT\Live\Interface\Addons\BotDsBridge\`
+- Scanner successfully attaches to RIFT PID 31584 (`isAttached: true`, metrics flowing)
+- Provider status: Faulted — `/reloadui` needed in RIFT to load the addon and emit V5 frames
+- App running on `http://localhost:5068` with token `dev-test-token`
+- Start command: `BotDs__Scanner__ProcessId=31584 BotDs__Scanner__ProcessName=rift_x64 BotDs__Dashboard__ApiToken=dev-test-token ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://localhost:5068 dotnet run --no-build`
+
+### Test Count: 512/512
+
+## Quick Start / Setup Guide
+
+### Prerequisites
+- .NET 10 SDK (`global.json` pins to `10.0.204`)
+- Windows x64
+- RIFT MMO installed
+
+### 1. Restore and verify
+```cmd
+dotnet restore BotDs.sln
+dotnet build BotDs.sln --no-restore
+dotnet test BotDs.sln --no-restore
+```
+All 512 tests must pass, zero errors, zero warnings.
+
+### 2. Install the addon
+Copy `addons/BotDsBridge/BotDsBridge/` into RIFT's addon directory:
+```cmd
+mkdir "C:\Program Files (x86)\Glyph\Games\RIFT\Live\Interface\Addons\BotDsBridge"
+copy addons\BotDsBridge\BotDsBridge\* "C:\Program Files (x86)\Glyph\Games\RIFT\Live\Interface\Addons\BotDsBridge\"
+```
+In RIFT, type `/reloadui` to load the addon. You should see "BotDs Bridge" text in the top-left corner.
+
+### 3. Launch the app
+```cmd
+cd src\BotDs.App
+set BotDs__Scanner__ProcessName=rift_x64
+set BotDs__Dashboard__ApiToken=your-token-here
+set BotDs__Dashboard__ControlToken=your-control-token
+set ASPNETCORE_URLS=http://localhost:5068
+dotnet run
+```
+Or with explicit PID:
+```cmd
+set BotDs__Scanner__ProcessId=12345
+set BotDs__Scanner__ProcessName=rift_x64
+dotnet run
+```
+
+### 4. Open the dashboard
+Navigate to `http://localhost:5068` and enter your API token.
+
+### 5. Publish (standalone)
+```cmd
+dotnet publish src/BotDs.App/BotDs.App.csproj -c Release -r win-x64 --self-contained false -o publish/
+```
+Run the published app: `cd publish && BotDs.exe`
 
 ## Inputs Still Needed
 

@@ -108,6 +108,7 @@ try
     app.UseStaticFiles();
     app.MapDashboardEndpoints();
     app.MapSettingsEndpoints();
+    app.MapFallbackToFile("index.html");
 
     ProfileService profileService = app.Services.GetRequiredService<ProfileService>();
     Directory.CreateDirectory(profileService.DirectoryPath);

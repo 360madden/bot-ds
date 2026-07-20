@@ -2,7 +2,7 @@
 
 - The .NET 10 solution contains Core combat/profile contracts, the v5 Reader transport parser, an ASP.NET Core localhost dashboard host, a static dashboard, and xUnit tests.
 - After restoring packages, verify with the complete command set in `PLAN.md` section 14.3.
-- The Reader includes Windows x64 process attachment, readable-region enumeration, V5 sentinel scanning, candidate relocation, and scanner metrics. The hosted Reader loop, live addon field population, and action output are not implemented. The application cannot send game input.
+- The Reader includes Windows x64 process attachment, readable-region enumeration, V5 sentinel scanning, candidate relocation, and scanner metrics. A hosted TelemetryReaderLoop bridges the V5ScannerService through SnapshotAssembler to SnapshotPublisher. The ActionCoordinator supports Disabled/DryRun/Live output modes with WindowsKeySink for SendInput-based key dispatch.
 - `PLAN.md` is the formal architecture and completion contract. `ROADMAP.md` is the ordered milestone plan.
 
 # Toolchain Constraints
