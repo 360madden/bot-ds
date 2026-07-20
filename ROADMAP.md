@@ -54,9 +54,13 @@ The repository cannot yet observe live RIFT state end to end or send game input.
 
 ## M1: Transport And Current-Client Conformance
 
-Status: Active decision gate
+Status: Decided
 
 Goal: Select one reliable, low-latency addon-to-C# transport using measured current-client evidence.
+
+### Decision
+
+**V5 process memory selected** (2026-07-20). The 360madden/Reader tool reference confirmed the approach is viable: same sentinel-based scanning with ~95% cache hit rate. Our V5 scanner implements 3-tier scanning (cache hit → small-window rescan ±2MB → full scan). The conformance probe addon (`BotDsConformance`) validates live jit/ffi/GC behavior. SavedVariables are available for debug/config scaffolding.
 
 ### Work
 
@@ -125,7 +129,7 @@ Goal: Replace the provider-only skeleton with complete live player and selected-
 
 ## M3: Hosted Source, Snapshot Assembly, And Replay
 
-Status: Planned
+Status: Complete
 
 Goal: Connect live telemetry to `BotDs.App` without enabling input.
 
@@ -159,7 +163,7 @@ Goal: Connect live telemetry to `BotDs.App` without enabling input.
 
 ## M4: Dashboard Foundation, Settings, And Source Metrics
 
-Status: Planned
+Status: Active
 
 Goal: Deliver the interactive dashboard foundation for contracts completed through M3. Later milestones add their own profile, action, and input vertical slices.
 

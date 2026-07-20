@@ -89,7 +89,7 @@ public sealed class LocalSettingsService
         try
         {
             string temp = _filePath + ".tmp";
-            string json = JsonSerializer.Serialize(proposed, JsonOptions);
+            string json = JsonSerializer.Serialize(merged, JsonOptions);
             File.WriteAllText(temp, json);
             File.Move(temp, _filePath, overwrite: true);
             _current = merged;

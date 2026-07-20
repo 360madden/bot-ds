@@ -205,6 +205,9 @@ public static class CombatProfileLoader
             }
         }
 
+        // Key binding validation (M5)
+        errors.AddRange(KeyBindingValidator.ValidateAll(profile));
+
         // Enabled-profile structural requirements
         if (profile.Enabled)
         {

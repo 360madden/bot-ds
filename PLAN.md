@@ -1,6 +1,6 @@
 # BotDs Formal Implementation Plan
 
-Status: Approved baseline for the read-only M1 decision experiment. M2 and later implementation remain blocked until M1 selects and records one production transport.
+Status: Active. M1 transport selected (V5 process memory). M3 snapshot assembly complete. M4 settings and dashboard in progress.
 
 Last updated: 2026-07-20
 
@@ -104,9 +104,11 @@ The optical path passes only when live tests prove:
 - Source-to-normalized-snapshot latency stays within the performance budget.
 - Each capture generation is bound to one exact RIFT top-level window, PID, and process-start identity.
 
-### 4.3 Selection rule
+### 4.3 Selection rule — DECIDED
 
-Run bounded proofs for both paths only as needed to make the decision. Select exactly one production transport. Do not maintain two production providers without a demonstrated personal-use need.
+**V5 process memory selected** (2026-07-20). The 360madden/Reader reference tool proved the approach works with the same sentinel-based scanning and ~95% cache hit rate. Our implementation uses 3-tier scanning: cache hit validation, small-window rescan (±2MB direct chunk reads), and full VirtualQueryEx scan.
+
+The optical fallback path is archived. Memory stability is maintained by the GC/allocator behavior confirmed through the conformance probe addon.
 
 Arbitrary internal game-memory reconstruction, process writes, injection, and native in-game modules are not implicit fallbacks. They require a separate architecture decision.
 

@@ -84,6 +84,8 @@
   const scannerCacheHits = $("scanner-cache-hits");
   const scannerCacheMisses = $("scanner-cache-misses");
   const scannerFullScans = $("scanner-full-scans");
+  const scannerWindowHits = $("scanner-window-hits");
+  const scannerWindowMisses = $("scanner-window-misses");
   const scannerReadCycles = $("scanner-read-cycles");
   const scannerReadFails = $("scanner-read-fails");
 
@@ -153,6 +155,19 @@
   const logFilter = $("log-filter");
   const btnClearLog = $("btn-clear-log");
   const logAutoscroll = $("log-autoscroll");
+
+  // Settings
+  const settingsForm = $("settings-form");
+  const setScannerInterval = $("set-scanner-interval");
+  const setScannerMaxage = $("set-scanner-maxage");
+  const setScannerProcess = $("set-scanner-process");
+  const setEvalTelemetryAge = $("set-eval-telemetry-age");
+  const setEvalInterval = $("set-eval-interval");
+  const setDashInterval = $("set-dash-interval");
+  const setDashLogLimit = $("set-dash-log-limit");
+  const setLogRetained = $("set-log-retained");
+  const btnSaveSettings = $("btn-save-settings");
+  const settingsStatus = $("settings-status");
 
   // SSE
   const sseDot = $("sse-dot");
@@ -354,6 +369,8 @@
       setText(scannerCacheHits, formatSeq(m.cacheHitCount));
       setText(scannerCacheMisses, formatSeq(m.cacheMissCount));
       setText(scannerFullScans, formatSeq(m.fullScanCount));
+      setText(scannerWindowHits, formatSeq(m.smallWindowHits));
+      setText(scannerWindowMisses, formatSeq(m.smallWindowMisses));
       setText(scannerReadCycles, formatSeq(m.readCycleFailures != null
         ? (m.cacheHitCount || 0) + (m.cacheMissCount || 0) + (m.readCycleFailures || 0)
         : null));
@@ -491,6 +508,7 @@
     // Faulted is deliberately not clearable. Clear Stop only releases the
     // explicit Stopped latch.
     btnClearStop.disabled = state !== "Stopped";
+    updateSettingsButtonState();
   }
 
   async function loadProfiles() {
@@ -721,6 +739,77 @@
     }
   }
 
+  // ---- Settings ----
+  async function loadSettings() {
+    try {
+      var s = await apiFetch("/api/settings");
+      if (s) {
+        var sc = s.scanner || {};
+        setScannerInterval.value = sc.readIntervalMs ?? 50;
+        setScannerMaxage.value = sc.localMaxAgeMs ?? 500;
+        setScannerProcess.value = sc.processName || "";
+        var ev = s.evaluator || {};
+        setEvalTelemetryAge.value = ev.maximumTelemetryAgeMs ?? 500;
+        setEvalInterval.value = ev.evaluationIntervalMs ?? 100;
+        var db = s.dashboard || {};
+        setDashInterval.value = db.updateIntervalMs ?? 2000;
+        setDashLogLimit.value = db.maxLogEntries ?? 500;
+        var lg = s.logging || {};
+        setLogRetained.value = lg.retainedFileCountLimit ?? 14;
+        settingsStatus.textContent = "";
+      }
+    } catch (err) {
+      addLogEntry("warn", "settings", "Failed to load settings: " + err.message);
+    }
+  }
+
+  async function saveSettings() {
+    var payload = {
+      scanner: {
+        readIntervalMs: parseInt(setScannerInterval.value) || 50,
+        localMaxAgeMs: parseInt(setScannerMaxage.value) || 500,
+        processName: setScannerProcess.value.trim() || null,
+      },
+      evaluator: {
+        maximumTelemetryAgeMs: parseInt(setEvalTelemetryAge.value) || 500,
+        evaluationIntervalMs: parseInt(setEvalInterval.value) || 100,
+      },
+      dashboard: {
+        updateIntervalMs: parseInt(setDashInterval.value) || 2000,
+        maxLogEntries: parseInt(setDashLogLimit.value) || 500,
+      },
+      logging: {
+        retainedFileCountLimit: parseInt(setLogRetained.value) || 14,
+      },
+    };
+
+    try {
+      btnSaveSettings.disabled = true;
+      settingsStatus.textContent = "Saving…";
+      var result = await apiFetch("/api/settings", "PUT", payload);
+      settingsStatus.textContent = "✓ Saved";
+      // Refresh form with server state
+      await loadSettings();
+      addLogEntry("info", "settings", "Settings saved");
+    } catch (err) {
+      settingsStatus.textContent = "Error: " + err.message;
+      addLogEntry("error", "settings", "Settings save failed: " + err.message);
+    } finally {
+      updateSettingsButtonState();
+    }
+  }
+
+  function updateSettingsButtonState() {
+    if (!lastStatus) {
+      btnSaveSettings.disabled = true;
+      return;
+    }
+    var ctrl = lastStatus.controller || lastStatus;
+    var state = ctrl.state || ctrl.controllerState || "Disarmed";
+    var isDisarmed = state === "Disarmed";
+    btnSaveSettings.disabled = !isDisarmed;
+  }
+
   // ---- Control actions ----
   async function doControlAction(endpoint, label) {
     try {
@@ -857,6 +946,12 @@
     logFilter.addEventListener("change", applyLogFilter);
     btnClearLog.addEventListener("click", clearLog);
 
+    // Settings form
+    settingsForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      saveSettings();
+    });
+
     // Keyboard: Escape closes dialog
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && armDialog.open) {
@@ -866,6 +961,7 @@
 
     // Initial load
     addLogEntry("info", "system", "Dashboard loaded");
+    if (getToken()) loadSettings();
     reconnectAll();
   }
 
@@ -879,6 +975,7 @@
     if (sseReader) {
       sseReader.cancel().catch(function () { });
     }
+    if (getToken()) loadSettings();
     loadProfiles();
     connectSSE();
     startPolling();
