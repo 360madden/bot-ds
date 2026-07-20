@@ -184,6 +184,24 @@
           <dd id="profile-abilities">—</dd>
         </div>
       </dl>
+      <button type="button" class="btn btn--sm" id="btn-edit-profile" disabled>Edit</button>
+    </section>
+
+    <!-- Profile Editor (shown when Edit is clicked) -->
+    <section class="card card--profile-editor" id="profile-editor-section" hidden aria-labelledby="editor-heading">
+      <h2 id="editor-heading" class="card__title">Profile Editor</h2>
+      <div class="profile-editor__toolbar">
+        <span id="editor-filename" class="mono">—</span>
+        <div>
+          <button type="button" class="btn btn--sm" id="btn-editor-refresh">Refresh</button>
+          <button type="button" class="btn btn--sm" id="btn-editor-close">Close</button>
+        </div>
+      </div>
+      <textarea id="profile-editor-textarea" class="profile-editor__textarea" rows="20" spellcheck="false" aria-label="Profile JSON"></textarea>
+      <div class="profile-editor__actions">
+        <button type="button" class="btn" id="btn-save-profile" disabled>Save Profile</button>
+        <span class="profile-editor__status" id="editor-status" aria-live="polite"></span>
+      </div>
     </section>
 
     <!-- Row 2: Player / Target / Telemetry -->

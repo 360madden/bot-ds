@@ -114,12 +114,22 @@
   // Profiles
   const profileSelect = $("profile-select");
   const btnReloadProfiles = $("btn-reload-profiles");
+  const btnEditProfile = $("btn-edit-profile");
   const profileDetail = $("profile-detail");
   const profileId = $("profile-id");
   const profileCalling = $("profile-calling");
   const profileLevel = $("profile-level");
   const profileRules = $("profile-rules");
   const profileAbilities = $("profile-abilities");
+
+  // Profile editor
+  const profileEditorSection = $("profile-editor-section");
+  const profileEditorTextarea = $("profile-editor-textarea");
+  const editorFilename = $("editor-filename");
+  const btnEditorRefresh = $("btn-editor-refresh");
+  const btnEditorClose = $("btn-editor-close");
+  const btnSaveProfile = $("btn-save-profile");
+  const editorStatus = $("editor-status");
 
   // Player
   const playerName = $("player-name");
@@ -460,9 +470,11 @@
     var p = profilesData.find(function (x) { return x.id === id; });
     if (!p) {
       profileDetail.hidden = true;
+      btnEditProfile.disabled = true;
       return;
     }
     profileDetail.hidden = false;
+    btnEditProfile.disabled = false;
     setText(profileId, p.id);
     setText(profileCalling, p.character ? p.character.calling : "—");
     setText(profileLevel,
@@ -513,6 +525,7 @@
     // explicit Stopped latch.
     btnClearStop.disabled = state !== "Stopped";
     updateSettingsButtonState();
+    updateEditorSaveState();
   }
 
   async function loadProfiles() {
@@ -1008,6 +1021,14 @@
       saveSettings();
     });
 
+    // Profile editor
+    btnEditProfile.addEventListener("click", openProfileEditor);
+    btnEditorRefresh.addEventListener("click", function () {
+      if (selectedProfileId) openProfileEditor();
+    });
+    btnEditorClose.addEventListener("click", closeProfileEditor);
+    btnSaveProfile.addEventListener("click", saveProfileEdit);
+
     // Keyboard: Escape closes dialog
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && armDialog.open) {
@@ -1019,6 +1040,66 @@
     addLogEntry("info", "system", "Dashboard loaded");
     if (getToken()) loadSettings();
     reconnectAll();
+  }
+
+  // ---- Profile editor ----
+  async function openProfileEditor() {
+    if (!selectedProfileId) return;
+    try {
+      editorStatus.textContent = "Loading…";
+      profileEditorSection.hidden = false;
+      btnSaveProfile.disabled = true;
+      var profile = await apiFetch("/api/profiles/" + encodeURIComponent(selectedProfileId));
+      profileEditorTextarea.value = JSON.stringify(profile, null, 2);
+      editorFilename.textContent = selectedProfileId + ".json";
+      editorStatus.textContent = "";
+      updateEditorSaveState();
+    } catch (err) {
+      editorStatus.textContent = "Error: " + err.message;
+      addLogEntry("error", "editor", "Failed to load profile: " + err.message);
+    }
+  }
+
+  function closeProfileEditor() {
+    profileEditorSection.hidden = true;
+    editorStatus.textContent = "";
+  }
+
+  async function saveProfileEdit() {
+    if (!selectedProfileId) return;
+    var json = profileEditorTextarea.value;
+    var body;
+    try {
+      body = JSON.parse(json);
+    } catch (e) {
+      editorStatus.textContent = "Invalid JSON: " + e.message;
+      return;
+    }
+
+    try {
+      btnSaveProfile.disabled = true;
+      editorStatus.textContent = "Saving…";
+      await apiFetch("/api/profiles/" + encodeURIComponent(selectedProfileId), "PUT", body);
+      editorStatus.textContent = "✓ Saved";
+      addLogEntry("info", "editor", "Profile '" + selectedProfileId + "' saved");
+      // Reload profiles to refresh cache
+      await loadProfiles();
+    } catch (err) {
+      editorStatus.textContent = "Error: " + err.message;
+      addLogEntry("error", "editor", "Profile save failed: " + err.message);
+    } finally {
+      updateEditorSaveState();
+    }
+  }
+
+  function updateEditorSaveState() {
+    if (!lastStatus) {
+      btnSaveProfile.disabled = true;
+      return;
+    }
+    var ctrl = lastStatus.controller || lastStatus;
+    var state = ctrl.state || ctrl.controllerState || "Disarmed";
+    btnSaveProfile.disabled = state !== "Disarmed";
   }
 
   function reconnectAll() {
