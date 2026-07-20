@@ -20,6 +20,8 @@ public static class DashboardEndpoints
 
         api.MapGet("/status", GetStatus);
         api.MapGet("/profiles", GetProfiles);
+        api.MapGet("/profiles/{id}", GetProfileById);
+        api.MapPut("/profiles/{id}", SaveProfile);
         api.MapPost("/profiles/reload", ReloadProfiles);
         api.MapPost("/control/profile", SetProfile);
         api.MapPost("/control/arm", Arm);
@@ -68,6 +70,79 @@ public static class DashboardEndpoints
             ActiveProfileId = profileService.ActiveProfileId,
             Profiles = profiles,
         }, JsonOptions);
+    }
+
+    private static IResult GetProfileById(
+        string id,
+        [FromServices] ProfileService profileService)
+    {
+        var profile = profileService.GetProfile(id);
+        if (profile is null)
+            return Results.NotFound(new { Error = $"Profile '{id}' not found." });
+
+        return Results.Json(profile, JsonOptions);
+    }
+
+    private static async Task<IResult> SaveProfile(
+        string id,
+        [FromBody] JsonElement body,
+        [FromServices] ProfileService profileService,
+        [FromServices] ControllerStateMachine stateMachine,
+        [FromServices] ILogger<Program> log,
+        CancellationToken ct)
+    {
+        IDisposable? lease = stateMachine.TryBeginConfiguration();
+        if (lease is null)
+            return Results.Conflict(new { Error = "Disarm before editing profiles." });
+
+        using (lease)
+        {
+            // Validate before writing — use same options as CombatProfileLoader
+            string json = body.GetRawText();
+            CombatProfile? profile;
+            var validateOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+            {
+                AllowTrailingCommas = true,
+                ReadCommentHandling = JsonCommentHandling.Skip,
+                UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+                Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+            };
+            try
+            {
+                using var ms = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+                profile = await JsonSerializer.DeserializeAsync<CombatProfile>(ms, validateOptions, ct);
+            }
+            catch (JsonException ex)
+            {
+                return Results.BadRequest(new { Error = "Invalid JSON.", Detail = ex.Message });
+            }
+
+            var validation = CombatProfileLoader.Validate(profile);
+            if (!validation.IsValid)
+                return Results.BadRequest(new { Error = "Profile validation failed.", validation.Errors });
+
+            // Id must match URL
+            if (!string.Equals(validation.Profile!.Id, id, StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest(new { Error = $"Profile id '{validation.Profile.Id}' does not match URL '{id}'." });
+
+            // Atomic write via temp file
+            string filePath = Path.Combine(profileService.DirectoryPath, $"{id}.json");
+            string tempPath = filePath + ".tmp";
+            await File.WriteAllTextAsync(tempPath, json, ct);
+            File.Move(tempPath, filePath, overwrite: true);
+
+            // Reload the profile into cache
+            ProfileReloadResult reload = await profileService.ReloadAsync(ct);
+            if (!reload.Success)
+            {
+                log.LogWarning("Profile {ProfileId} saved to disk but reload failed: {Errors}",
+                    id, string.Join("; ", reload.Errors));
+                return Results.BadRequest(new { Error = "Profile saved but reload failed.", reload.Errors });
+            }
+
+            log.LogInformation("Profile '{ProfileId}' saved and reloaded via dashboard", id);
+            return Results.Ok(new { Status = "saved", Id = id });
+        }
     }
 
     private static IResult Arm(
