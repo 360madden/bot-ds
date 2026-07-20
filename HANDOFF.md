@@ -9,8 +9,10 @@ Restart OpenCode from `C:\work\bot-ds`, then ask: `resume implementation with co
 Read these files before changing code:
 
 1. `AGENTS.md`
-2. `context/README.md` and every indexed context document
-3. This handoff
+2. `PLAN.md`
+3. `ROADMAP.md`
+4. `context/README.md` and every indexed context document
+5. This handoff
 
 ## Agent Runtime Status
 
@@ -26,18 +28,17 @@ The user approved implementation of a Windows x64 combat-only RIFT bot with:
 
 - C# and .NET 10 for the application and all new executable helpers.
 - A Lua addon component that publishes structured game state for the external Reader subsystem.
-- A high-performance, low-latency Reader with an integrity-checked, double-buffered protocol.
+- A high-performance, low-latency local telemetry provider. The existing integrity-checked V5 memory Reader is the preferred candidate, pending the formal M1 transport gate.
 - Current player-selected hostile target only; no target acquisition or switching.
 - Versioned JSON combat profiles and no Warrior-specific engine logic.
 - A level-45 Warrior only as the first data fixture.
 - Foreground RIFT action output through configured key bindings.
 - A localhost ASP.NET Core dashboard with live state and full local controls.
 - Minimal structured local logs, monotonic durations, useful error boundaries, and enough action history to diagnose personal use without collecting credentials or chat content.
-- Personal-tool operation: publisher policy, terms-of-service interpretation, account enforcement, and account-risk acceptance are explicitly not implementation gates or arming confirmations.
 - Privacy remains a requirement: loopback-only control, no credential capture, no chat-content collection, and no unnecessary sensitive identifiers in logs.
 - Movement, pathfinding, and navigation remaining out of scope.
 
-The detailed reviewed plan is preserved in the conversation history. The context documents record source evidence and unresolved runtime validation requirements.
+The formal architecture and completion contract is `PLAN.md`; ordered milestones and exit criteria are in `ROADMAP.md`.
 
 ## Repository Constraints
 
@@ -51,8 +52,7 @@ The detailed reviewed plan is preserved in the conversation history. The context
 ### Personal Tool Workflow
 
 - Optimize for one local operator, direct functionality, and straightforward maintenance rather than commercial-product operations.
-- Do not spend implementation or review cycles evaluating publisher policy or account enforcement unless the user explicitly asks for that research.
-- Do not add terms/account-risk warnings or acknowledgements to the dashboard or runtime controls.
+- Prioritize the user's requested functionality, reliability, performance, maintainability, local control, and privacy.
 - Retain technical input controls that prevent accidental interaction with the wrong process or stale state.
 - Prefer one concise local diagnostic stream over separate application, action, and audit infrastructures unless a concrete debugging need appears.
 
@@ -143,8 +143,7 @@ The merged configuration and agent definitions passed `opencode debug config` an
 - V5 parsing now enforces exact section masks, uniqueness, ordering, schema version, heartbeat contents, and exact section-body consumption.
 - Unknown health and omitted aura telemetry fail closed; explicit empty aura sections remain distinguishable from unknown state.
 - Dashboard API locality uses the remote loopback address, and profile reload requires control authorization.
-- Dashboard arming confirms only current technical readiness; it does not request terms or account-risk acknowledgement.
-- Profile reload is atomic, rejects duplicate IDs, and clears stale profiles when the configured directory disappears.
+- Dashboard arming confirms current technical readiness.
 - Profile reload now preserves the previous cache and active profile on missing directory, invalid JSON, or semantic validation failure — reload is fully atomic.
 - Profile validation details are bounded to 120 characters, and load failures omit exception text and absolute paths.
 - Profile validation rejects non-blank `character.build` on enabled profiles and enforces structural requirements: at least one enabled binding, at least one enabled rule, no rules referencing disabled bindings, and level-range overlap between enabled rules and the profile's level range.
@@ -190,12 +189,7 @@ Do not let concurrent agents edit the same project file. Let the primary agent p
 
 ## Remaining Implementation
 
-1. Resolve the live addon backing-storage invariant: the current immutable Lua string is rebuilt repeatedly, so address stability and stale-copy behavior require runtime validation or a transport redesign before enabling live publication.
-2. Populate live addon unit, ability, cast, and aura sections after current-client conformance validation.
-3. Add a hosted Reader service that publishes normalized snapshots to the `SnapshotPublisher` and preserves the last full snapshot across heartbeat-only frames without carrying state across inspection failure, session change, or transport faults. The `V5ScannerService`, `V5HealthMapper`, and `SnapshotPublisher` are ready; the wiring and `IHostedService` implementation are not.
-4. Implement action acknowledgement tracking, rate limits, foreground/focus checks, and emergency-stop input hooks before any keyboard actuator is added.
-5. Add endpoint-level dashboard integration tests and recorded replay tests; scanner/native fixtures, malformed protocol, middleware security, profile reload, controller lifecycle, and telemetry-safety coverage now exist.
-6. Continue findings-only review after each implementation slice; scanner, evaluator, and profile-validation reviews completed.
+The authoritative sequence and exit criteria are in `ROADMAP.md`. The active milestone is M1: transport and current-client conformance.
 
 ## Inputs Still Needed
 
@@ -203,7 +197,6 @@ The user has not supplied the current Warrior's actual:
 
 - RIFT ability IDs and exact names.
 - Action-bar keys.
-- Build/soul label.
 - Intended ordered combat rules.
 - Buff/debuff IDs used by the rotation.
 
@@ -216,5 +209,7 @@ dotnet restore BotDs.sln
 dotnet build BotDs.sln --no-restore
 dotnet test BotDs.sln --no-restore
 dotnet format BotDs.sln --verify-no-changes --no-restore
+node --check src/BotDs.App/wwwroot/js/app.js
 luac -p addons/BotDsBridge/BotDsBridge/main.lua
+git diff --check
 ```

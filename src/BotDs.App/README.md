@@ -1,6 +1,6 @@
 # BotDs.App: Localhost Dashboard Host
 
-ASP.NET Core 10 web application serving a static dashboard, a REST/SSE API, and the bot controller on loopback only. This is a personal local tool; it does not collect credentials, chat content, or sensitive identifiers, and it does not expose control endpoints beyond loopback.
+ASP.NET Core 10 web application serving a static dashboard, a REST/SSE API, and the bot controller. The default launch profiles bind localhost, and API middleware rejects non-loopback requests. Explicit listener-level rejection of non-loopback overrides is scheduled in roadmap M3.
 
 ## Run
 
@@ -105,12 +105,11 @@ The following capabilities are **not present** in this build:
 
 ## Privacy boundary
 
-- The application runs on localhost only; no remote endpoints are exposed.
+- Default launch profiles bind localhost, and current API middleware rejects non-loopback callers. Listener-level loopback enforcement is an M3 completion criterion.
 - Credentials and chat content are not collected.
 - Sensitive identifiers are omitted from logs.
 - Control endpoints are not exposed beyond loopback.
 - Origin checks reject cross-origin requests.
-- The `context/` directory contains publisher-policy and account-enforcement research retained as historical evidence only; it does not influence runtime behaviour.
 
 ## Tests
 

@@ -1,16 +1,17 @@
 # BotDs: RIFT Combat Automation
 
-Personal, local combat-only bot for Gamigo's RIFT MMO. The intended data path is a Lua addon, a process-memory V5 region, an external C# Reader, and data-driven combat profiles. Movement, pathfinding, and navigation are out of scope.
+Personal, local combat-only bot for Gamigo's RIFT MMO. The intended data path is a Lua addon, one current-client-validated local telemetry transport, an external C# provider, and data-driven combat profiles. The existing V5 process-memory Reader is the preferred candidate, subject to the M1 stable-storage gate. Movement, pathfinding, and navigation are out of scope.
+
+Project direction is defined by the [formal implementation plan](PLAN.md) and [formal roadmap](ROADMAP.md).
 
 ## Architecture
 
 ```
 Lua addon (BotDsBridge)
-  |  Publishes V5 frame (TLV sections, CRC32, double-buffer) into process memory
+  |  Observes structured RIFT state and publishes through the M1-selected transport
   v
-External Reader (BotDs.Reader)
-  |  Windows x64 process attach, readable-region enumeration, V5 sentinel scanning,
-  |  candidate relocation, dual-buffer CRC validation, scanner metrics
+External provider (BotDs.Reader)
+  |  Current V5 candidate: process attach, sentinel scanning, CRC validation, metrics
   v
 Core (BotDs.Core)
   |  TelemetryFrame, CombatProfile records, JSON loader/validator, CombatEvaluator
@@ -38,15 +39,17 @@ BotDs.sln
 ## Quick start
 
 Requires .NET 10 SDK (pinned to `10.0.204` in `global.json`; `latestPatch` roll-forward).
+Node.js is required only for the dashboard JavaScript syntax gate, and `luac` is required for the addon syntax gate.
 
 ```text
 dotnet restore BotDs.sln
 dotnet build BotDs.sln --no-restore
 dotnet test BotDs.sln --no-restore
 dotnet format BotDs.sln --verify-no-changes --no-restore
+node --check src/BotDs.App/wwwroot/js/app.js
+luac -p addons/BotDsBridge/BotDsBridge/main.lua
+git diff --check
 ```
-
-Also verify the Lua addon syntax: `luac -p addons/BotDsBridge/BotDsBridge/main.lua`
 
 ## Dashboard token setup
 
@@ -84,4 +87,4 @@ The Reader locates the target process by PID, name, or both via `ProcessSelector
 
 ## Privacy
 
-All communication is loopback-only. The application does not collect credentials, chat content, or unnecessary sensitive identifiers. Logs are structured NDJSON with 14-day retention. Dashboard tokens are never placed in URLs; SSE uses authenticated `fetch()` streaming.
+Default launch profiles bind localhost, and API middleware rejects non-loopback callers. Explicit listener-level loopback enforcement is scheduled in roadmap M3. The application does not collect credentials, chat content, or unnecessary sensitive identifiers. Logs are structured NDJSON with 14-day retention. Dashboard tokens are never placed in URLs; SSE uses authenticated `fetch()` streaming.
