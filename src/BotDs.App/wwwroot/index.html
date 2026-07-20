@@ -322,6 +322,58 @@
       </form>
     </section>
 
+    <!-- Row 3: Coordinator / Action History -->
+    <section class="card card--coordinator" id="coordinator-section" hidden aria-labelledby="coordinator-heading">
+      <h2 id="coordinator-heading" class="card__title">Coordinator</h2>
+      <dl class="detail-grid">
+        <div class="detail-row">
+          <dt>Output Mode</dt>
+          <dd id="coord-mode" class="status-badge" aria-live="polite">Disabled</dd>
+        </div>
+        <div class="detail-row">
+          <dt>Pending Action</dt>
+          <dd id="coord-pending" class="mono">—</dd>
+        </div>
+        <div class="detail-row">
+          <dt>History</dt>
+          <dd id="coord-history-count" class="mono">0</dd>
+        </div>
+      </dl>
+      <div class="coord-actions">
+        <label for="output-mode-select" class="sr-only">Output mode</label>
+        <select id="output-mode-select" class="select" disabled>
+          <option value="disabled">Disabled</option>
+          <option value="dryRun">Dry Run</option>
+          <option value="live">Live</option>
+        </select>
+        <button type="button" class="btn btn--sm" id="btn-set-output-mode" disabled>Apply</button>
+      </div>
+    </section>
+
+    <section class="card card--action-history" id="action-history-section" hidden aria-labelledby="action-history-heading">
+      <div class="card__header-row">
+        <h2 id="action-history-heading" class="card__title">Action History</h2>
+        <span class="mono" id="action-history-total">0 entries</span>
+      </div>
+      <div class="action-history-table-wrap" id="action-history-table-wrap">
+        <table class="action-history-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Rule</th>
+              <th>Ability</th>
+              <th>Key</th>
+              <th>Outcome</th>
+              <th>Detail</th>
+            </tr>
+          </thead>
+          <tbody id="action-history-body">
+            <tr><td colspan="6" class="action-history-empty">No actions dispatched yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- Row 4: Event Log (full width) -->
     <section class="card card--log" aria-labelledby="log-heading">
       <div class="card__header-row">

@@ -30,6 +30,7 @@ public static class DashboardEndpoints
         api.MapPost("/control/clear-stop", ClearStop);
         api.MapGet("/readiness", GetReadiness);
         api.MapPost("/control/output-mode", SetOutputMode);
+        api.MapGet("/coordinator", GetCoordinator);
         api.MapGet("/events", StreamEvents);
 
         return builder;
@@ -43,9 +44,31 @@ public static class DashboardEndpoints
         [FromServices] ControllerStateMachine stateMachine,
         [FromServices] ProfileService profileService,
         [FromServices] EvaluatorLoop evaluator,
+        [FromServices] ActionCoordinator? coordinator = null,
         [FromServices] TelemetryReaderLoop? readerLoop = null)
     {
-        return Results.Json(CreateStatusPayload(publisher, stateMachine, profileService, evaluator, readerLoop), JsonOptions);
+        return Results.Json(CreateStatusPayload(publisher, stateMachine, profileService, evaluator, coordinator, readerLoop), JsonOptions);
+    }
+
+    private static IResult GetCoordinator(
+        [FromServices] ActionCoordinator coordinator)
+    {
+        var history = coordinator.RecentHistory.Select(r => new
+        {
+            r.Timestamp,
+            r.RuleId,
+            r.AbilityId,
+            r.Key,
+            Outcome = r.Outcome.ToString(),
+            r.Detail,
+        }).ToList();
+
+        return Results.Json(new
+        {
+            OutputMode = coordinator.Mode.ToString(),
+            PendingAction = coordinator.PendingAction,
+            RecentHistory = history,
+        }, JsonOptions);
     }
 
     private static IResult GetProfiles([FromServices] ProfileService profileService)
@@ -256,6 +279,7 @@ public static class DashboardEndpoints
         [FromServices] ControllerStateMachine stateMachine,
         [FromServices] EvaluatorLoop evaluator,
         [FromServices] ProfileService profileService,
+        [FromServices] ActionCoordinator? coordinator,
         [FromServices] TelemetryReaderLoop? readerLoop,
         [FromServices] ILogger<Program> log,
         CancellationToken ct)
@@ -279,7 +303,7 @@ public static class DashboardEndpoints
                     lastSequence = frame.Provider.Sequence;
                     lastState = currentState;
 
-                    object payload = CreateStatusPayload(publisher, stateMachine, profileService, evaluator, readerLoop);
+                    object payload = CreateStatusPayload(publisher, stateMachine, profileService, evaluator, coordinator, readerLoop);
 
                     await context.Response.WriteAsync("data: ", ct);
                     await JsonSerializer.SerializeAsync(context.Response.Body, payload, JsonOptions, ct);
@@ -301,11 +325,15 @@ public static class DashboardEndpoints
         ControllerStateMachine stateMachine,
         ProfileService profileService,
         EvaluatorLoop evaluator,
+        ActionCoordinator? coordinator = null,
         TelemetryReaderLoop? readerLoop = null)
     {
         TelemetryFrame frame = publisher.Latest;
         var (state, stopReason, message, pendingAction) = stateMachine.Snapshot;
         EvaluationResult? lastResult = evaluator.LastResult;
+
+        // Resolve ActionCoordinator from the evaluator's service provider
+        // (Alternatively, add ActionCoordinator as a parameter)
 
         return new
         {
@@ -372,10 +400,21 @@ public static class DashboardEndpoints
             frame.Player,
             frame.Target,
             ActiveProfileId = profileService.ActiveProfileId,
-            Coordinator = readerLoop is not null
+            Coordinator = coordinator is not null
                 ? new
                 {
-                    // Coordinator info added when ActionCoordinator is available (M6)
+                    OutputMode = coordinator.Mode.ToString(),
+                    PendingAction = coordinator.PendingAction,
+                    HistoryCount = coordinator.RecentHistory.Count,
+                    RecentHistory = coordinator.RecentHistory.TakeLast(10).Select(r => new
+                    {
+                        r.Timestamp,
+                        r.RuleId,
+                        r.AbilityId,
+                        r.Key,
+                        Outcome = r.Outcome.ToString(),
+                        r.Detail,
+                    }).ToList(),
                 }
                 : null,
         };

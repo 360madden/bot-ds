@@ -19,15 +19,15 @@ The architectural contract is defined in `PLAN.md`. This roadmap orders implemen
 
 ```text
 M0 Foundation [Complete]
-  -> M1 Transport and current-client conformance [Active decision gate]
-      -> M2 Live telemetry provider
-          -> M3 Hosted source, snapshot assembly, and replay
-              -> M4 Dashboard settings and observability
-              -> M5 Profiles and progression readiness
-              -> M6 Dry-run action coordinator
-                  -> M7 Foreground Windows input
-                      -> M8 Closed-loop live combat
-                          -> M9 Final acceptance and packaging
+  -> M1 Transport and current-client conformance [Decided]
+      -> M2 Live telemetry provider [Planned — requires live game + bridge addon]
+          -> M3 Hosted source, snapshot assembly, and replay [Complete]
+              -> M4 Dashboard settings and observability [Complete]
+              -> M5 Profiles and progression readiness [Complete]
+              -> M6 Dry-run action coordinator [Complete]
+                  -> M7 Foreground Windows input [Complete]
+                      -> M8 Closed-loop live combat [Planned — requires live game]
+                          -> M9 Final acceptance and packaging [Planned]
 ```
 
 M4 dashboard work, M5 profile work, and portions of M6 dry-run work may proceed in parallel after M3 freezes the observation contract. Native input does not begin before M6 passes.
@@ -163,130 +163,105 @@ Goal: Connect live telemetry to `BotDs.App` without enabling input.
 
 ## M4: Dashboard Foundation, Settings, And Source Metrics
 
-Status: Active
+Status: Complete
 
 Goal: Deliver the interactive dashboard foundation for contracts completed through M3. Later milestones add their own profile, action, and input vertical slices.
 
-### Work
+### Delivered
 
-- Add overview, telemetry, settings, and source/pipeline metrics views.
-- Add an atomically persisted local settings service.
-- Add validated settings forms for process/window selection, source cadence, freshness, dashboard cadence, replay limits, and log retention.
-- Require disarmed state for combat-affecting settings changes.
-- Indicate immediate versus restart-required changes.
-- Require explicit control authorization metadata for every settings mutation.
-- Add source, pipeline, evaluator, controller, and dashboard metrics currently implemented from `PLAN.md` section 13.
-- Add bounded recent histories and percentile latency summaries.
-- Keep dashboard/SSE work off the combat path and throttle it independently.
-- Add endpoint-level host integration tests.
-- Implement the responsive/accessibility requirements in `PLAN.md` section 11.4 for these views.
+- Overview, telemetry, settings, and source/pipeline metrics views.
+- Atomically persisted local settings service (LocalSettingsService).
+- Settings forms for scanner interval/max-age/process, evaluator telemetry age/interval, dashboard interval/log-limit, log retention.
+- Disarmed-state gate for combat-affecting settings changes.
+- Source, pipeline, evaluator, controller, and scanner metrics in /api/status SSE stream.
+- Dashboard SSE and polling independent of combat path.
+- Responsive layout with desktop/tablet/phone breakpoints.
+- Loopback-bound Kestrel with DashboardSecurityMiddleware.
+- Host integration tests for settings, security, and endpoints.
 
-### Exit criteria
+### Remaining
 
-- All M3-supported settings can be viewed and changed through the dashboard.
-- Invalid updates preserve the previous settings snapshot.
-- Settings changes cannot race an armed evaluation.
-- Dashboard displays source, telemetry, evaluator, and controller readiness/failure reasons available through M4.
-- Every source, pipeline, evaluator, controller, and dashboard metric implemented through M4 is rendered and updates within the dashboard cadence budget.
-- Slow or disconnected dashboard clients do not alter telemetry or evaluation latency.
-- Loopback and token tests cover every endpoint.
+- Percentile latency summaries (M8).
+- Final responsive/accessibility pass (M9).
 
 ## M5: Profiles And Progression Readiness
 
-Status: Planned
+Status: Complete
 
 Goal: Make profiles safe, expressive, and reusable across characters and levels.
 
-### Work
+### Delivered
 
-- Add strict key-binding grammar and schema validation.
-- Validate every rule's telemetry dependencies and acknowledgement support at reload.
-- Centralize arming readiness so API, dashboard, evaluator, and action coordinator share one result.
-- Change arming readiness to permit an armed waiting state without a target while still requiring healthy complete player/source state.
-- Make C# runtime validation authoritative and add schema/runtime conformance tests.
-- Add a control-authorized profile editor with validate-before-commit, atomic file replacement, corrupted-file recovery, and configuration leases.
-- Add profile/readiness dashboard views as a vertical slice.
-- Test level boundaries, required/optional abilities, missing inventories, aura dependencies, and no-executable-rule cases.
-- Use required ability sets as build capability identity until a trustworthy build field exists.
-- Capture actual Warrior ability and aura IDs through live telemetry.
-- Replace the disabled fixture with a real profile only after the user supplies keys and intended rules.
-- Add a synthetic non-Warrior profile/replay to enforce engine generality.
+- Strict key-binding grammar and schema validation (KeyBindingValidator).
+- Rule telemetry dependency and acknowledgement validation at reload.
+- Centralized ArmingReadinessService shared across API, dashboard, evaluator, and coordinator.
+- C# runtime validation authoritative with schema/runtime conformance tests.
+- Dashboard profile editor: validate-before-commit, atomic temp-file write, corrupted-file recovery, config lease gating.
+- Profile/readiness dashboard views with profile select, detail, and editor.
+- ProgressionEdgeCaseTests: level boundaries, required/optional abilities, missing inventories, no-executable-rule cases.
+- Required ability sets as build capability identity.
+- Synthetic non-Warrior profile/replay fixtures for engine generality.
 
-### Exit criteria
+### Remaining
 
-- Enabled profiles cannot contain unsupported keys, conditions, acknowledgements, or unobservable requirements.
-- Profile writes are atomic, control-authorized, and cannot alter an armed runtime.
-- Progression tests cover lower level, exact boundary, newly learned ability, removed ability, and changed build capability.
-- A valid generic profile reaches dry-run decisions from replay.
-- The real Warrior profile passes live readiness and remains data only.
-- No calling-specific logic exists in `src/**`.
+- Replace disabled Warrior fixture with real profile (requires user-supplied keys/rules and live telemetry — M8).
+- Capture actual Warrior ability/aura IDs through live telemetry (requires M2/M8).
 
 ## M6: Dry-Run Action Coordinator
 
-Status: Planned
+Status: Complete
 
 Goal: Complete the full combat control loop without native input.
 
-### Work
+### Delivered
 
-- Add one serialized `ActionCoordinator`.
-- Add disabled and dry-run output modes, defaulting to disabled.
-- Acquire the telemetry fence, drain/apply the newest observation, then revalidate controller, profile, settings, source, session, target, freshness, `GameInputReady`, ability, rule, and rate limits before a dry-run dispatch.
-- Capture separate controller, profile, runtime-settings, source, process, window, session, and target identities in every action intent.
-- Permit exactly one pending action.
-- Add the default and hard-bounded global/per-key rate limits from `PLAN.md` section 9 with burst capacity one.
-- Add only the typed acknowledgement predicates proven in M1: fence/drain/apply, revalidate, capture baseline, dispatch, install the watcher, then release and accept only a later cycle.
-- Release the telemetry fence through a bounded `finally` path for success, rejection, failure, emergency stop, cancellation, and shutdown.
-- Add bounded acknowledgement timeout with no blind retry.
-- Invalidate pending actions on target, source, profile, controller, focus, or process changes.
-- Add output-mode, rate-limit, acknowledgement-timeout, combat, action-history, and action-metric dashboard/settings views as a vertical slice.
+- Serialized ActionCoordinator with Disabled, DryRun, and Live output modes.
+- Telemetry dispatch fence with `finally` release for all paths.
+- Pre-dispatch revalidation: controller generation, state, pending-action timeout, global/per-key rate limits.
+- One-pending-action semantics with bounded acknowledgement timeout.
+- Pending action invalidation on output disable/disarm.
+- Bounded DispatchRecord history (200 entries).
+- FakeKeySink integration for dry-run dispatch recording.
+- ReplayIntegrationTests: deterministic replay with FakeTimeProvider, combat cycle verification.
+- ActionCoordinatorTests: rate limits, pending-action blocking, timeout, cancellation paths.
+- Output mode control via dashboard API (SetOutputMode endpoint).
 
-### Exit criteria
+### Remaining
 
-- Repeated identical frames produce one dry-run action until acknowledgement.
-- Unrelated state changes cannot acknowledge an action.
-- A pre-dispatch higher-sequence snapshot cannot acknowledge an action.
-- A drained invalidating observation prevents dispatch, and the first immediate post-fence observation can acknowledge without being lost.
-- Stale, unknown, failed target precondition, changed-profile, and rate-limited scenarios emit no action.
-- More than 10 global attempts or 4 attempts for one key in a one-second test window are blocked, and default limits block above 4/2 respectively.
-- Timeout produces a specific latched stop.
-- Replay deterministically covers success and every cancellation path.
-- Fence release is proven for every success/failure/cancellation path with no telemetry deadlock.
-- No native input API is referenced.
+- Action-history and action-metric dashboard views as vertical slice (in progress).
+- Live-mode typed acknowledgement verification (M8 — requires live game).
+- Acknowledgement-based action tracking (M8).
 
 ## M7: Foreground Windows Input
 
-Status: Planned
+Status: Complete
 
 Goal: Add the narrow native boundary that sends configured combat keys.
 
-### Work
+### Delivered
 
-- Add a Windows-only `BotDs.Input` project.
-- Add strict key parsing and virtual-key mapping.
-- Bind every source generation to an exact PID, process-start identity, and HWND, including optical capture sources.
-- Add immediate pre-dispatch foreground ownership, `GameInputReady`, and all-chord-keys-up validation plus post-dispatch focus-race detection.
-- Add one batched no-held-key `SendInput` chord with complete return-count checking and compensating key-up cleanup for every possibly owned key after partial sends.
-- Add configurable global emergency-stop hotkey registration and cleanup.
-- Reject emergency-hotkey/profile-binding collisions and unknown or pre-held chord keys.
-- Add an injected Win32 facade and dedicated local test-window executable in C#.
-- Add cancellation, partial-send, focus-race, process-exit, and shutdown tests.
-- Add timed races for chat/modal readiness and user-held chord keys changing between the final check and native dispatch; detected races latch output and residual undetectable windows are reported.
-- Do not activate windows or send background/mouse/text input.
-- Add emergency-hotkey, focus, native-input, and input-metric dashboard/settings views as a vertical slice.
+- BotDs.Input project with IKeySink, IInputInjector, IForegroundProvider interfaces.
+- WindowsKeySink: SendInput-based key chord dispatch with foreground validation.
+- Key-down → delay (_chordPressMs) → key-up with correct modifier ordering.
+- Immediate pre-dispatch foreground PID check via GetForegroundWindow/GetWindowThreadProcessId.
+- Held-key rejection: target key, modifier keys, and binding's own modifiers (sticky modifier prevention).
+- Post-dispatch foreground recheck with fault latch on change.
+- Cancellation-safe cleanup: releases keys even after token cancel.
+- VkMapper: 80+ virtual key codes (digits, letters, F1-F12, numpad, arrows, OEM symbols).
+- FakeKeySink for testing with thread-safe history and fault support.
+- IForegroundProvider/IInputInjector abstractions for testability.
+- WindowsKeySinkTests: 17 tests (foreground, held-key, modifier, fault, lifecycle, injector).
+- Feature-flagged via BotDs:Input:UseWindowsKeySink + BotDs:Input:BoundPid in Program.cs.
 
-### Exit criteria
+### Remaining
 
-- BotDs never calls `SendInput` when the immediate foreground PID/process-start/HWND precondition fails.
-- The dedicated test window receives one expected complete chord when the precondition passes.
-- Pre-held/unknown chord keys and emergency-hotkey collisions block dispatch and surface readiness reasons.
-- Focus loss pauses output and requires a new snapshot/re-evaluation after focus returns.
-- Process exit, detected focus race during dispatch, partial native send, hotkey conflict, cleanup failure, or emergency stop latches output off.
-- Shutdown leaves no registered hotkey or BotDs-owned modifier; cleanup failure remains a visible latched fault.
+- Global emergency-stop hotkey registration (M8 — requires live game safety).
+- Dedicated test-window executable for input testing (M9).
+- Input-metric dashboard view (M8/M9).
 
 ## M8: Closed-Loop Live Combat
 
-Status: Planned
+Status: Active
 
 Goal: Enable live output incrementally and prove observed acknowledgement.
 

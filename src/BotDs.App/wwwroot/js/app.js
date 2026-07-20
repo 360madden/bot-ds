@@ -183,6 +183,17 @@
   const btnSaveSettings = $("btn-save-settings");
   const settingsStatus = $("settings-status");
 
+  // Coordinator
+  const coordMode = $("coord-mode");
+  const coordPending = $("coord-pending");
+  const coordHistoryCount = $("coord-history-count");
+  const outputModeSelect = $("output-mode-select");
+  const btnSetOutputMode = $("btn-set-output-mode");
+  const coordinatorSection = $("coordinator-section");
+  const actionHistorySection = $("action-history-section");
+  const actionHistoryBody = $("action-history-body");
+  const actionHistoryTotal = $("action-history-total");
+
   // SSE
   const sseDot = $("sse-dot");
   const sseStatusText = $("sse-status-text");
@@ -429,6 +440,76 @@
     setText(seqAge, formatDuration(ageMs));
     setText(seqSession, provider.sessionId || "—");
     setText(seqLastUpdate, formatTime(provider.receivedAtUtc));
+
+    // Coordinator
+    if (status.coordinator) {
+      updateCoordinator(status.coordinator);
+    }
+  }
+
+  // ---- Coordinator display ----
+  function updateCoordinator(coord) {
+    setHidden(coordinatorSection, false);
+    setHidden(actionHistorySection, false);
+
+    // Output mode badge
+    var mode = coord.outputMode || "Disabled";
+    setStatusBadge(coordMode, mode);
+    outputModeSelect.value = mode.charAt(0).toLowerCase() + mode.slice(1);
+
+    // Pending action
+    if (coord.pendingAction) {
+      var pa = coord.pendingAction;
+      setText(coordPending, pa.abilityId + " [" + pa.key + "] rule=" + pa.ruleId);
+    } else {
+      setText(coordPending, "—");
+    }
+
+    // History count
+    var count = coord.historyCount || 0;
+    setText(coordHistoryCount, String(count));
+    setText(actionHistoryTotal, count + " entries");
+
+    // Render action history table
+    var history = coord.recentHistory || [];
+    if (history.length === 0) {
+      actionHistoryBody.innerHTML = '<tr><td colspan="6" class="action-history-empty">No actions dispatched yet</td></tr>';
+    } else {
+      var rows = "";
+      for (var i = history.length - 1; i >= 0; i--) {
+        var r = history[i];
+        rows += '<tr><td class="mono">' + escapeHtml(formatTime(r.timestamp)) + '</td>'
+          + '<td class="mono">' + escapeHtml(r.ruleId || "—") + '</td>'
+          + '<td>' + escapeHtml(r.abilityId || "—") + '</td>'
+          + '<td class="mono">' + escapeHtml(r.key || "—") + '</td>'
+          + '<td><span class="outcome-tag outcome-tag--' + (r.outcome || "").toLowerCase() + '">'
+          + escapeHtml((r.outcome || "").replace(/([a-z])([A-Z])/g, "$1 $2")) + '</span></td>'
+          + '<td class="detail-cell">' + escapeHtml(r.detail || "—") + '</td></tr>';
+      }
+      actionHistoryBody.innerHTML = rows;
+    }
+
+    // Update output mode selector state
+    updateOutputModeSelector();
+  }
+
+  function updateOutputModeSelector() {
+    var ctrl = lastStatus && lastStatus.controller ? lastStatus.controller : null;
+    var state = ctrl ? (ctrl.state || ctrl.controllerState || "Disarmed") : "Disarmed";
+    var isDisarmed = state === "Disarmed";
+    outputModeSelect.disabled = !isDisarmed;
+    btnSetOutputMode.disabled = !isDisarmed;
+  }
+
+  async function setOutputMode() {
+    var mode = outputModeSelect.value;
+    try {
+      await apiFetch("/api/control/output-mode", "POST", { mode: mode });
+      addLogEntry("info", "coordinator", "Output mode set to " + mode);
+      pollStatus();
+    } catch (err) {
+      addLogEntry("error", "coordinator", "Failed to set output mode: " + err.message);
+    }
   }
 
   // ---- Profile handling ----
@@ -526,6 +607,7 @@
     btnClearStop.disabled = state !== "Stopped";
     updateSettingsButtonState();
     updateEditorSaveState();
+    updateOutputModeSelector();
   }
 
   async function loadProfiles() {
@@ -1028,6 +1110,9 @@
     });
     btnEditorClose.addEventListener("click", closeProfileEditor);
     btnSaveProfile.addEventListener("click", saveProfileEdit);
+
+    // Output mode
+    btnSetOutputMode.addEventListener("click", setOutputMode);
 
     // Keyboard: Escape closes dialog
     document.addEventListener("keydown", function (e) {

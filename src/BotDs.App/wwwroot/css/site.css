@@ -760,6 +760,227 @@ dialog::backdrop {
   html { font-size: 14px; }
 }
 
+/* ---------- Coordinator ---------- */
+.coord-actions {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+  margin-top: .75rem;
+  padding-top: .75rem;
+  border-top: 1px solid #21262d;
+}
+.coord-actions .select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Coordinator output mode badge colors */
+.status-badge[data-status="disabled"] {
+  background: var(--gray-bg);
+  color: var(--gray);
+}
+.status-badge[data-status="disabled"]::before {
+  background: var(--gray);
+}
+
+.status-badge[data-status="dryrun"] {
+  background: rgba(88, 166, 255, .12);
+  color: var(--accent);
+}
+.status-badge[data-status="dryrun"]::before {
+  background: var(--accent);
+  animation: pulse 1.5s infinite;
+}
+
+.status-badge[data-status="live"] {
+  background: var(--green-bg);
+  color: var(--green);
+}
+.status-badge[data-status="live"]::before {
+  background: var(--green);
+  animation: pulse 1.5s infinite;
+}
+
+/* ---------- Profile editor ---------- */
+.card--profile-editor {
+  grid-column: 1 / -1;
+}
+
+.profile-editor__toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: .5rem;
+}
+
+.profile-editor__textarea {
+  width: 100%;
+  min-height: 400px;
+  padding: .75rem;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid #30363d;
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: .8rem;
+  line-height: 1.55;
+  resize: vertical;
+  tab-size: 2;
+}
+.profile-editor__textarea:focus {
+  border-color: var(--accent);
+}
+
+.profile-editor__actions {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  margin-top: .5rem;
+}
+
+.profile-editor__status {
+  font-size: .82rem;
+  color: var(--text-secondary);
+}
+
+/* ---------- Arm readiness ---------- */
+.arm-readiness {
+  margin: .75rem 0;
+  min-height: 3rem;
+}
+
+.arm-readiness__loading {
+  color: var(--text-muted);
+  font-size: .85rem;
+}
+
+.arm-readiness__status {
+  font-weight: 600;
+  font-size: .9rem;
+  margin-bottom: .25rem;
+}
+.arm-readiness__status--ok { color: var(--green); }
+.arm-readiness__status--blocked { color: var(--red); }
+
+.arm-readiness__blockers {
+  list-style: none;
+  padding: 0;
+  margin: .25rem 0;
+}
+.arm-readiness__blocker {
+  color: var(--red);
+  font-size: .82rem;
+  padding: .15rem 0;
+}
+
+.arm-readiness__warnings {
+  list-style: none;
+  padding: 0;
+  margin: .25rem 0;
+}
+.arm-readiness__warning {
+  color: var(--yellow);
+  font-size: .82rem;
+  padding: .15rem 0;
+}
+
+.arm-readiness__error {
+  color: var(--red);
+  font-size: .85rem;
+}
+
+/* ---------- Action history ---------- */
+.card--action-history {
+  grid-column: 1 / -1;
+}
+
+.action-history-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #21262d;
+  border-radius: var(--radius-sm);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.action-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .8rem;
+  font-family: var(--mono);
+}
+
+.action-history-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.action-history-table th {
+  text-align: left;
+  padding: .4rem .6rem;
+  background: #21262d;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+.action-history-table td {
+  padding: .35rem .6rem;
+  border-bottom: 1px solid #21262d;
+  white-space: nowrap;
+}
+
+.action-history-table tbody tr:hover {
+  background: var(--bg-card-hover);
+}
+
+.action-history-table .detail-cell {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-history-empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 1.5rem !important;
+  font-family: var(--font);
+}
+
+/* Outcome tags */
+.outcome-tag {
+  display: inline-block;
+  padding: .1rem .4rem;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.outcome-tag--dispatched {
+  background: var(--green-bg);
+  color: var(--green);
+}
+
+.outcome-tag--ratelimited,
+.outcome-tag--pendingactionblocked,
+.outcome-tag--cancelled {
+  background: var(--yellow-bg);
+  color: var(--yellow);
+}
+
+.outcome-tag--revalidationfailed,
+.outcome-tag--acknowledgementtimeout,
+.outcome-tag--notarmed {
+  background: var(--red-bg);
+  color: var(--red);
+}
+
 /* ---------- Loading spinner ---------- */
 @keyframes spin {
   to { transform: rotate(360deg); }
