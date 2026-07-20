@@ -253,8 +253,7 @@ internal static class ScannerTestHelpers
     }
 
     /// <summary>
-    /// Build a complete V5 buffer slot with ProviderInfo + optional Player section.
-    /// Sections are written in ascending mask order (ProviderInfo=0x01, Player=0x02).
+    /// Build a complete V5 buffer slot with ProviderInfo + Player section.
     /// </summary>
     public static byte[] BuildSlotWithPlayer(
         uint sequence, Guid sessionId,
@@ -263,36 +262,11 @@ internal static class ScannerTestHelpers
         int healthCur, int healthMax,
         uint producerFrameMs = 0, uint maxAgeMs = 500)
     {
-        byte[] slot = new byte[V5Constants.BufferSlotSize];
-        slot[V5Constants.HdrProtocolVersionOffset] = V5Constants.ProtocolVersion;
-        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrSequenceOffset), sequence);
-        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrProducerFrameMsOffset), producerFrameMs);
-
-        // Build ProviderInfo section (same as BuildSlot)
-        byte[] provider = new byte[28];
-        sessionId.TryWriteBytes(provider);
-        BitConverter.TryWriteBytes(provider.AsSpan(16), producerFrameMs);
-        BitConverter.TryWriteBytes(provider.AsSpan(20), maxAgeMs);
-        provider[26] = 1; // schema version
-        provider[27] = 0; // reserved
-
-        // Build Player UnitState section
-        byte[] playerSection = BuildUnitSection(
-            id: "player1", name: playerName, level: level, calling: calling,
-            flags: unitFlags, relation: relation,
+        byte[] unit = BuildUnitSection(id: "player1", name: playerName, level: level,
+            calling: calling, flags: unitFlags, relation: relation,
             healthCur: healthCur, healthMax: healthMax);
-
-        // Write sections in ascending mask order: ProviderInfo (0x01) then Player (0x02)
-        int offset = V5Constants.PayloadOffset;
-        offset = WriteSectionHeader(slot, offset, V5Constants.SectionTypeProviderInfo, provider);
-        offset = WriteSectionHeader(slot, offset, V5Constants.SectionTypePlayer, playerSection);
-
-        uint payloadLength = (uint)(offset - V5Constants.PayloadOffset);
-        uint sectionsMask = V5Constants.MaskProviderInfo | V5Constants.MaskPlayer;
-        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrSectionsMaskOffset), sectionsMask);
-        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrPayloadLengthOffset), payloadLength);
-        V5Crc32.WriteCrc(slot, payloadLength);
-        return slot;
+        return BuildSlotWithUnit(sequence, sessionId, V5Constants.SectionTypePlayer,
+            V5Constants.MaskPlayer, unit, producerFrameMs, maxAgeMs);
     }
 
     /// <summary>
@@ -389,7 +363,7 @@ internal static class ScannerTestHelpers
     }
 
     /// <summary>
-    /// Build a complete V5 buffer slot with ProviderInfo + Target section (hostile NPC).
+    /// Build a complete V5 buffer slot with ProviderInfo + Target section.
     /// </summary>
     public static byte[] BuildSlotWithTarget(
         uint sequence, Guid sessionId,
@@ -397,6 +371,23 @@ internal static class ScannerTestHelpers
         byte unitFlags, byte relation,
         int healthCur, int healthMax,
         uint producerFrameMs = 0, uint maxAgeMs = 500)
+    {
+        byte[] unit = BuildUnitSection(id: "target-npc", name: targetName, level: level,
+            flags: unitFlags, relation: relation,
+            healthCur: healthCur, healthMax: healthMax);
+        return BuildSlotWithUnit(sequence, sessionId, V5Constants.SectionTypeTarget,
+            V5Constants.MaskTarget, unit, producerFrameMs, maxAgeMs);
+    }
+
+    /// <summary>
+    /// Shared helper: build a V5 buffer slot with ProviderInfo + one unit section.
+    /// Sections are written in ascending mask order (ProviderInfo first, then unit).
+    /// </summary>
+    private static byte[] BuildSlotWithUnit(
+        uint sequence, Guid sessionId,
+        ushort sectionType, uint sectionMask,
+        byte[] unitSection,
+        uint producerFrameMs, uint maxAgeMs)
     {
         byte[] slot = new byte[V5Constants.BufferSlotSize];
         slot[V5Constants.HdrProtocolVersionOffset] = V5Constants.ProtocolVersion;
@@ -410,17 +401,12 @@ internal static class ScannerTestHelpers
         provider[26] = 1;
         provider[27] = 0;
 
-        byte[] targetSection = BuildUnitSection(
-            id: "target-npc", name: targetName, level: level, calling: null,
-            flags: unitFlags, relation: relation,
-            healthCur: healthCur, healthMax: healthMax);
-
         int offset = V5Constants.PayloadOffset;
         offset = WriteSectionHeader(slot, offset, V5Constants.SectionTypeProviderInfo, provider);
-        offset = WriteSectionHeader(slot, offset, V5Constants.SectionTypeTarget, targetSection);
+        offset = WriteSectionHeader(slot, offset, sectionType, unitSection);
 
         uint payloadLength = (uint)(offset - V5Constants.PayloadOffset);
-        uint sectionsMask = V5Constants.MaskProviderInfo | V5Constants.MaskTarget;
+        uint sectionsMask = V5Constants.MaskProviderInfo | sectionMask;
         BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrSectionsMaskOffset), sectionsMask);
         BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrPayloadLengthOffset), payloadLength);
         V5Crc32.WriteCrc(slot, payloadLength);
