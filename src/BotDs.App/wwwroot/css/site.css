@@ -250,6 +250,16 @@ body {
   border-color: #da3633;
 }
 
+.btn--clear {
+  background: var(--orange);
+  color: var(--text-inverse);
+  border-color: var(--orange);
+}
+.btn--clear:hover:not(:disabled) {
+  background: #c4611e;
+  border-color: #c4611e;
+}
+
 /* ---------- Select ---------- */
 .select {
   padding: .375rem .625rem;

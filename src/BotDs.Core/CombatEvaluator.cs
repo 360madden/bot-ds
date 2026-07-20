@@ -49,16 +49,48 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge, TimeProvider? 
         if (!MatchesCharacter(profile.Character, player, out string? mismatch))
             return Stop(StopReason.ProfileMismatch, mismatch);
 
+        // Defense-in-depth: enabled profiles must omit Build entirely. Disabled
+        // profiles may retain a nonblank draft value, but they never reach here.
+        if (profile.Character.Build is not null)
+            return Stop(StopReason.ProfileMismatch, "V5 does not observe build identity; enabled profile must not specify a character build.");
+
+        if (profile.Abilities is null || profile.Rules is null || frame.Abilities is null)
+            return Stop(StopReason.IntegrityFailure, "Profile has no abilities or rules.");
+
+        // Required binding reconciliation: applicable required bindings must be present and available.
+        List<AbilityBinding> applicableRequired = [];
+        foreach (AbilityBinding binding in profile.Abilities.Values)
+        {
+            if (binding is null || !binding.Enabled || !binding.Required)
+                continue;
+            if (IsLevelInRange(binding, player.Level))
+                applicableRequired.Add(binding);
+        }
+
+        if (applicableRequired.Count > 0)
+        {
+            if (!frame.IsAbilitiesKnown)
+                return Stop(StopReason.ProviderUnavailable,
+                    $"Ability inventory is unknown but the profile has {applicableRequired.Count} required ability binding(s).");
+
+            foreach (AbilityBinding binding in applicableRequired)
+            {
+                if (string.IsNullOrWhiteSpace(binding.AbilityId))
+                    return Stop(StopReason.IntegrityFailure, "Required ability binding has no abilityId.");
+                if (!frame.Abilities.TryGetValue(binding.AbilityId, out AbilityState? ability) || ability is null || !ability.Available)
+                    return Stop(StopReason.ProfileMismatch,
+                        $"Required ability '{binding.AbilityId}' is not available in telemetry.");
+            }
+        }
+
         UnitState? target = frame.Target;
         if (target is null || target.Health is null || !target.IsAvailable || target.Health.IsDead)
             return new EvaluationResult(ControllerState.WaitingForTarget, null, [], Message: "Waiting for a live selected target.");
         if (!target.IsHostile)
             return new EvaluationResult(ControllerState.WaitingForTarget, null, [], Message: "Selected target is not hostile.");
 
-        if (profile.Abilities is null || profile.Rules is null || frame.Abilities is null)
-            return Stop(StopReason.IntegrityFailure, "Profile has no abilities or rules.");
-
         List<RuleRejection> rejections = [];
+        bool anyRuleReachable = false;
         foreach (CombatRule rule in profile.Rules)
         {
             if (rule is null)
@@ -72,12 +104,24 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge, TimeProvider? 
                 continue;
             }
 
-            if (!profile.Abilities.TryGetValue(rule.Ability, out AbilityBinding? binding) || binding is null)
+            if (string.IsNullOrWhiteSpace(rule.Ability)
+                || !profile.Abilities.TryGetValue(rule.Ability, out AbilityBinding? binding)
+                || binding is null)
             {
                 rejections.Add(new RuleRejection(rule.Id, [$"Ability alias '{rule.Ability}' not found in profile."]));
                 continue;
             }
+            if (!binding.Enabled)
+            {
+                rejections.Add(new RuleRejection(rule.Id, [$"Ability binding '{rule.Ability}' is disabled."]));
+                continue;
+            }
 
+            // A progression profile may contain rules for levels other than the
+            // current player level. Those rules are valid profile data, but they
+            // are not executable in this evaluation.
+            if (IsLevelInRange(binding, player.Level))
+                anyRuleReachable = true;
             List<string> reasons = EvaluateRule(rule, binding, frame, player, target);
             if (reasons.Count > 0)
             {
@@ -96,6 +140,10 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge, TimeProvider? 
                     frame.Provider.Sequence),
                 rejections);
         }
+
+        // Defense-in-depth: if all rules/bindings are disabled, stop rather than looping forever.
+        if (!anyRuleReachable)
+            return Stop(StopReason.IntegrityFailure, "Profile is enabled but has no enabled rule with an enabled binding.");
 
         return new EvaluationResult(ControllerState.Evaluating, null, rejections, Message: "No combat rule is currently valid.");
     }
@@ -124,6 +172,11 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge, TimeProvider? 
             reasons.Add("Player level is below the ability binding minimum.");
         if (binding.MaximumLevel.HasValue && player.Level > binding.MaximumLevel)
             reasons.Add("Player level is above the ability binding maximum.");
+        if (!frame.IsAbilitiesKnown)
+        {
+            reasons.Add("Ability inventory is unknown.");
+            return reasons;
+        }
         if (!frame.Abilities.TryGetValue(binding.AbilityId, out AbilityState? ability) || ability is null || !ability.Available)
         {
             reasons.Add($"Ability '{binding.AbilityId}' is unavailable.");
@@ -198,19 +251,6 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge, TimeProvider? 
             mismatch = $"Player level {player.Level} is above profile maximum {requirements.MaximumLevel}.";
             return false;
         }
-        if (!string.IsNullOrEmpty(requirements.Build))
-        {
-            if (string.IsNullOrEmpty(player.Build))
-            {
-                mismatch = $"Profile requires build '{requirements.Build}' but telemetry reports no build identity.";
-                return false;
-            }
-            if (!string.Equals(requirements.Build, player.Build, StringComparison.OrdinalIgnoreCase))
-            {
-                mismatch = $"Profile build '{requirements.Build}' does not match player build '{player.Build}'.";
-                return false;
-            }
-        }
         mismatch = null;
         return true;
     }
@@ -268,4 +308,12 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge, TimeProvider? 
 
     private static EvaluationResult Stop(StopReason reason, string? message) =>
         new(ControllerState.Stopped, null, [], reason, message);
+
+    private static bool IsLevelInRange(AbilityBinding binding, int? playerLevel)
+    {
+        if (playerLevel is null) return false;
+        if (binding.MinimumLevel.HasValue && playerLevel.Value < binding.MinimumLevel.Value) return false;
+        if (binding.MaximumLevel.HasValue && playerLevel.Value > binding.MaximumLevel.Value) return false;
+        return true;
+    }
 }

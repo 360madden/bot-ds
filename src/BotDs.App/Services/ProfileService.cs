@@ -4,6 +4,8 @@ namespace BotDs.App.Services;
 
 public sealed class ProfileService
 {
+    private const int MaxErrorDetailLength = 120;
+
     private readonly string _profilesDirectory;
     private readonly ILogger<ProfileService> _log;
     private IReadOnlyDictionary<string, CombatProfile> _cache =
@@ -83,13 +85,8 @@ public sealed class ProfileService
         string searchPath = _profilesDirectory;
         if (!Directory.Exists(searchPath))
         {
-            _log.LogWarning("Profiles directory not found: {Path}; clearing cache and active profile", searchPath);
-            lock (_lock)
-            {
-                _cache = new Dictionary<string, CombatProfile>(StringComparer.OrdinalIgnoreCase);
-                _activeProfileId = null;
-            }
-            return new ProfileReloadResult(false, [$"Profiles directory not found: {searchPath}"], []);
+            _log.LogWarning("Profiles directory not found; preserving current cache and active profile");
+            return new ProfileReloadResult(false, ["Profiles directory not found."], []);
         }
 
         var loaded = new Dictionary<string, CombatProfile>(StringComparer.OrdinalIgnoreCase);
@@ -103,22 +100,19 @@ public sealed class ProfileService
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            string error = $"Profiles directory could not be enumerated: {exception.Message}";
-            _log.LogWarning(exception, "{Error}; clearing cache and active profile", error);
-            lock (_lock)
-            {
-                _cache = new Dictionary<string, CombatProfile>(StringComparer.OrdinalIgnoreCase);
-                _activeProfileId = null;
-            }
+            string error = "Profiles directory could not be enumerated.";
+            _log.LogWarning("{Error} ({ExceptionType}); preserving current cache",
+                error, exception.GetType().Name);
             return new ProfileReloadResult(false, [error], []);
         }
 
         foreach (string file in files)
         {
             ProfileValidationResult result = await CombatProfileLoader.LoadAsync(file, ct);
+            string fileName = Path.GetFileName(file);
+
             if (result.IsValid && result.Profile is not null)
             {
-                string fileName = Path.GetFileName(file);
                 if (seenIds.TryGetValue(result.Profile.Id, out string? previousFile))
                 {
                     errors.Add($"Duplicate profile id '{result.Profile.Id}' in '{fileName}' and '{previousFile}'.");
@@ -136,14 +130,21 @@ public sealed class ProfileService
             }
             else
             {
-                _log.LogWarning("Invalid profile in {File}: {Errors}",
-                    Path.GetFileName(file), string.Join("; ", result.Errors));
+                string errorDetail = result.Profile is not null
+                    ? Truncate(string.Join("; ", result.Errors), MaxErrorDetailLength)
+                    : "Failed to load profile.";
+                // Loader exceptions may embed absolute paths. Keep exception text out
+                // of logs and API results; validation errors are generated in-memory
+                // and contain only profile data and field names.
+                _log.LogWarning("Invalid profile in {File}: {ErrorCount} validation/load error(s)",
+                    fileName, result.Errors.Count);
+                errors.Add($"Invalid profile in '{fileName}': {errorDetail}");
             }
         }
 
         if (errors.Count > 0)
         {
-            _log.LogWarning("Profile reload aborted due to duplicate ids; previous cache preserved");
+            _log.LogWarning("Profile reload aborted; previous cache preserved");
             return new ProfileReloadResult(false, errors, []);
         }
 
@@ -159,6 +160,9 @@ public sealed class ProfileService
 
         return new ProfileReloadResult(true, [], [.. loaded.Keys]);
     }
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength] + "...";
 }
 
 public sealed record ProfileReloadResult(

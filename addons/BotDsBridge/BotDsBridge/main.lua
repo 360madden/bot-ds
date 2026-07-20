@@ -5,6 +5,17 @@
 -- Inspect.Buff.Detail.
 -- All other game-state functions are stubbed and marked TODO for
 -- conformance testing against the current gamigo client.
+--
+-- Protocol Region Layout (16400 bytes total):
+--   Offset  0: Sentinel magic "BotDsV05" (8 bytes) + TotalSize (4) + BufferSlotSize (4)
+--   Offset 16: Buffer A (8192 bytes) — header (28) + payload (8164 max)
+--   Offset 8208: Buffer B (8192 bytes) — identical layout, toggled per frame
+-- The wire format is logically double-buffered: each frame replaces one slot and
+-- carries a CRC. The current skeleton stores that image in an immutable Lua
+-- string, however, so every helper below creates a new allocation. It therefore
+-- does NOT yet guarantee a stable virtual address or observable in-place
+-- CRC-last writes. Those guarantees require stable mutable backing storage and
+-- must be solved before this emitter is used for live telemetry.
 
 local PROTOCOL_VERSION = 5
 local BUFFER_SLOT_SIZE = 8192
@@ -45,19 +56,32 @@ local SENTINEL_MAGIC_OFFSET     = 0
 local SENTINEL_TOTAL_SIZE       = 8
 local SENTINEL_BUFFER_SLOT_SIZE = 12
 
--- Buffer A at offset 16, Buffer B at offset 8208
+-- Buffer A at offset 16, Buffer B at offset 8208.
+-- These offsets are relative to the start of the 16400-byte region string.
+-- The sentinel occupies bytes 0–15; buffer data starts at byte 16.
 local BUFFER_A_OFFSET = 16
 local BUFFER_B_OFFSET = 16 + BUFFER_SLOT_SIZE
 
 ----------------------------------------------------------------------
 -- CRC32 (CRC-32/ISO-HDLC: polynomial 0xEDB88320 reflected)
+--
+-- RIFT's addon Lua environment may not include the LuaJIT "bit" library.
+-- Therefore all uint32 bitwise operations (band, bxor, bor, rshift) are
+-- implemented below in pure Lua using integer arithmetic on the double-
+-- precision number type. Lua numbers can exactly represent integers up
+-- to 2^53, so the 32-bit range fits without precision loss.
 ----------------------------------------------------------------------
 local UINT32 = 4294967296
 
+-- Clamp `value` into the 32-bit unsigned integer range [0, 2^32-1].
+-- Uses modulo 2^32 (via math.floor to avoid floating inaccuracies at the boundary).
+-- This is the foundation for all pure-Lua bitwise operations below.
 local function normalize_u32(value)
     return math.floor(value) % UINT32
 end
 
+-- Pure-Lua bitwise AND: iterates over each bit position, accumulating
+-- powers of two where both operands have a 1 bit.
 local function band(left, right)
     left = normalize_u32(left)
     right = normalize_u32(right)
@@ -76,6 +100,7 @@ local function band(left, right)
     return result
 end
 
+-- Pure-Lua bitwise XOR: accumulates powers of two where bits differ.
 local function bxor(left, right)
     left = normalize_u32(left)
     right = normalize_u32(right)
@@ -92,14 +117,19 @@ local function bxor(left, right)
     return result
 end
 
+-- Pure-Lua bitwise OR: derived via (A + B - (A & B)).
+-- Uses the identity A|B = A + B - (A&B) to avoid a third bit-iteration loop.
 local function bor(left, right)
     return normalize_u32(left + right - band(left, right))
 end
 
+-- Pure-Lua logical right-shift: divide by 2^count after normalizing to uint32.
 local function rshift(value, count)
     return math.floor(normalize_u32(value) / (2 ^ count))
 end
 
+-- Pre-compute the 256-entry CRC-32 lookup table (reflected polynomial 0xEDB88320).
+-- Each entry is the CRC of a single byte value, computed once at module load.
 local crc32_table = {}
 for i = 0, 255 do
     local crc = i
@@ -113,13 +143,16 @@ for i = 0, 255 do
     crc32_table[i] = crc
 end
 
+-- Single-byte CRC step: XOR the running CRC with the new byte, look up
+-- the low 8 bits in the precomputed table, and combine with the shifted CRC.
 local function crc32_update(crc, byte)
     local index = band(bxor(crc, byte), 0xFF)
     return bxor(band(rshift(crc, 8), 0x00FFFFFF), crc32_table[index])
 end
 
--- Compute CRC32 over a range of bytes in the region string.
--- startOffset and length are byte positions in the string.
+-- Compute CRC32 over a contiguous range of the region string.
+-- startOffset is zero-based; length is the byte count.
+-- Uses the standard init=0xFFFFFFFF, final-XOR=0xFFFFFFFF convention.
 local function crc32_region(region, startOffset, length)
     local crc = 0xFFFFFFFF
     for i = 1, length do
@@ -129,7 +162,8 @@ local function crc32_region(region, startOffset, length)
     return bxor(crc, 0xFFFFFFFF)
 end
 
--- Compute CRC32 over two concatenated ranges
+-- Compute CRC32 over two non-contiguous ranges concatenated logically.
+-- Used by write_frame to cover header[0..23] + payload as a single CRC.
 local function crc32_combined(region, offset1, len1, offset2, len2)
     local crc = 0xFFFFFFFF
     for i = 1, len1 do
@@ -144,18 +178,31 @@ local function crc32_combined(region, offset1, len1, offset2, len2)
 end
 
 ----------------------------------------------------------------------
--- Little-endian write helpers (write into string at 1-based byte index)
+-- Little-endian write helpers
+--
+-- WARNING: Lua strings are immutable. Every write helper below creates a new
+-- string by concatenating `sub(1, pos-1)` + encoded bytes + `sub(pos+N)`.
+-- write_frame calls these helpers thousands of times, so the temporary allocation
+-- volume is much larger than one 16400-byte copy per frame. This intentionally
+-- simple provider skeleton is not suitable for live publication. A future
+-- transport must avoid the repeated copies and, more importantly, provide the
+-- stable virtual address required by the external Reader.
+--
+-- All positions are 1-based (Lua string indexing convention).
 ----------------------------------------------------------------------
+-- Write a single unsigned byte at position pos (1-based).
 local function write_u8(str, pos, val)
     return string.sub(str, 1, pos - 1) .. string.char(band(val, 0xFF)) .. string.sub(str, pos + 1)
 end
 
+-- Write uint16 in little-endian order: low byte first, then high byte.
 local function write_u16_le(str, pos, val)
     return string.sub(str, 1, pos - 1)
         .. string.char(band(val, 0xFF), band(rshift(val, 8), 0xFF))
         .. string.sub(str, pos + 2)
 end
 
+-- Write uint32 in little-endian order: bytes 0,1,2,3 from LSB to MSB.
 local function write_u32_le(str, pos, val)
     return string.sub(str, 1, pos - 1)
         .. string.char(
@@ -166,12 +213,16 @@ local function write_u32_le(str, pos, val)
         .. string.sub(str, pos + 4)
 end
 
+-- Write int32 as its unsigned two's-complement bit pattern in LE.
+-- Negative values are converted by adding 2^32, then written as uint32 LE.
 local function write_i32_le(str, pos, val)
     -- Convert signed int32 to unsigned bit pattern
     if val < 0 then val = val + 0x100000000 end
     return write_u32_le(str, pos, val)
 end
 
+-- Write a length-prefixed ASCII string: uint16 LE length, then raw bytes.
+-- maxLen truncates the string if it exceeds the field limit.
 local function write_ascii(str, pos, text, maxLen)
     maxLen = maxLen or #text
     local result = write_u16_le(str, pos, #text)
@@ -185,6 +236,8 @@ local function write_ascii(str, pos, text, maxLen)
     return result
 end
 
+-- Write a fixed-width ASCII field. Shorter strings are space-padded (0x20);
+-- longer strings are truncated. Used for ability/aura ID fields.
 local function write_fixed_ascii(str, pos, text, fieldSize)
     local result = str
     for i = 1, fieldSize do
@@ -199,6 +252,19 @@ end
 
 ----------------------------------------------------------------------
 -- Region and session state
+--
+-- `region` is the current 16400-byte logical image. The write helpers treat it
+-- as a byte array, but each write creates a new string and reassigns `region`.
+-- The sentinel bytes at offset 0 remain unchanged in the logical image. Their
+-- physical address is not stable, so they are not yet a reliable long-lived
+-- anchor for the external C# Reader.
+--
+-- `sessionId` is a 16-byte binary UUID (v4-style) generated at addon load.
+-- It persists for the lifetime of the addon; a new session starts on /reloadui.
+--
+-- `writeBufferIndex` toggles 0↔1 each frame to alternate between Buffer A and B.
+-- `sequence` starts at 1 and increments monotonically per frame. A reset to 1
+-- with a new sessionId signals a session restart to the Reader.
 ----------------------------------------------------------------------
 local region = nil         -- the 16400-byte backing string
 local sessionId = ""       -- 16-byte binary UUID
@@ -210,30 +276,45 @@ local maxTelemetryAgeMs = 500
 ----------------------------------------------------------------------
 -- Initialization
 ----------------------------------------------------------------------
+
+-- Generate a 16-byte binary UUID (v4-style random).
+--
+-- The RIFT addon environment does not expose a cryptographic RNG or
+-- os.time(); we derive bytes from Inspect.Time.Frame() (monotonic frame
+-- time in seconds since client start) combined with Knuth-inspired
+-- multiplicative constants to produce reasonably unique bits:
+--   - 0x9E3779B9 = 2^32 / φ (the golden ratio constant, for mixing)
+--   - 2654435761  = floor(2^32 * (√5-1)/2) (another φ-based constant)
+--   - 1836311903  = floor(2^32 * 0.6180339887) (fractional part of φ)
+-- These provide good bit dispersion without needing math.random.
+--
+-- Bytes 7 and 9 are then masked to set UUID version 4 (random) and
+-- variant 1 (RFC 4122), so the 16 bytes form a valid v4 UUID when
+-- displayed as hex.
+----------------------------------------------------------------------
 local function generate_uuid_binary()
-    -- Generate a random 16-byte UUID (v4 style).
-    -- RIFT addon environment may have math.random; we build a simple
-    -- random source from Inspect.Time.Frame() and entity IDs when available.
     local t = Inspect.Time.Frame() or 0
     local bytes = {}
     for i = 1, 16 do
-        -- Mix frame time, index, and constant to produce reasonably unique bytes
         local v = normalize_u32((t * 2654435761) + (i * 1836311903) + 0x9E3779B9)
         bytes[i] = band(rshift(v, (i % 4) * 8), 0xFF)
         t = t + 1
     end
-    -- Set version 4 (random) and variant 1
     bytes[7] = bor(band(bytes[7], 0x0F), 0x40)
     bytes[9] = bor(band(bytes[9], 0x3F), 0x80)
     local unpackValues = unpack or table.unpack
     return string.char(unpackValues(bytes))
 end
 
+-- Allocate the full 16400-byte region string (zero-filled) and write the
+-- sentinel header. Its bytes are retained in each later logical image and are
+-- the scan target used by the C# Reader. Immutable string replacement means
+-- the allocation address itself may still change.
+-- See PROTOCOL.md §2 for the sentinel layout.
 local function init_region()
-    -- Allocate the full region as a Lua string
     region = string.rep("\0", REGION_TOTAL_SIZE)
 
-    -- Write sentinel
+    -- Write sentinel magic
     for i = 1, #SENTINEL_MAGIC do
         region = write_u8(region, SENTINEL_MAGIC_OFFSET + i, string.byte(SENTINEL_MAGIC, i))
     end
@@ -247,9 +328,20 @@ end
 
 ----------------------------------------------------------------------
 -- Section encoders
+--
+-- Each section encoder returns (section_bytes, has_data):
+--   section_bytes — the raw TLV data (type+length prefix added by caller)
+--   has_data      — truthy if the section should be included in the frame;
+--                   currently always false for game-state sections (TODO stubs).
+--
+-- Wire encoding follows PROTOCOL.md §4: type-length-value with uint16 LE
+-- type and length. String fields use length-prefixed encoding (uint16 LE
+-- length followed by raw bytes), never null-terminated.
 ----------------------------------------------------------------------
 
--- Encode a length-prefixed ASCII string at current write offset
+-- Encode a length-prefixed ASCII string: writes uint16 LE byte count,
+-- then the string bytes (truncated to maxLen). Returns (buf, nextOffset).
+-- This is the standard wire format for all variable-length string fields.
 local function encode_ascii_field(buf, offset, text, maxLen)
     maxLen = maxLen or 128
     local tlen = math.min(#text, maxLen)
@@ -261,11 +353,20 @@ local function encode_ascii_field(buf, offset, text, maxLen)
     return buf, offset + tlen
 end
 
--- Encode ProviderInfo section. Returns (section_bytes, mask_bit_set)
+-- Build the ProviderInfo section (PROTOCOL.md §4.1).
+-- This is the only section always present in every frame. It carries:
+--   - SessionId (16 bytes): binary UUID that changes only on addon reload
+--   - ProducerFrameMs (uint32 LE): monotonic frame time from Inspect.Time.Frame(),
+--     NOT epoch time; the Reader uses it for candidate ordering while freshness
+--     is measured on the Reader's own monotonic clock
+--   - MaxTelemetryAgeMs (uint32 LE): emitter's acceptable staleness window
+--   - ClientVersion: Inspect.System.Version() string (currently empty — TODO)
+--   - SchemaVersion: always 1 (the section layout version within protocol v5)
+--   - Reserved: must be 0
+--
+-- Always returns (section_bytes, MASK_PROVIDER_INFO) regardless of state.
 local function encode_provider_info()
     local buf = ""
-    -- Fake wall clock: use frame time as an approximation
-    -- (os.time may not be available; frame time is monotonic)
     local producerFrameMs = math.floor((Inspect.Time.Frame() or 0) * 1000)
 
     local clientVersion = ""
@@ -273,14 +374,6 @@ local function encode_provider_info()
     -- local ver = Inspect.System.Version()
     -- if ver then clientVersion = ver .. "" end
 
-    -- Section data layout (offsets from section data start):
-    --  0:16 SessionId
-    -- 16:4  ProducerFrameMs (uint32 LE)
-    -- 20:4  MaxTelemetryAgeMs (uint32 LE)
-    -- 24:2  ClientVersionLength
-    -- 26:N  ClientVersion
-    -- 26+N:1 SchemaVersion
-    -- 27+N:1 Reserved
     local pos = 1
     -- SessionId: 16 bytes
     for i = 1, 16 do
@@ -310,7 +403,20 @@ local function encode_provider_info()
     return buf, MASK_PROVIDER_INFO
 end
 
--- Encode a unit state section (Player or Target)
+-- Build a unit state section (PROTOCOL.md §4.2).
+--
+-- Null/unknown fields use sentinel values:
+--   int32 fields: -1 (0xFFFFFFFF in two's complement LE)
+--   string fields: 0-length prefix
+--   relation: 0 = unknown
+--   flags: bit 2 (IsAvailable) cleared when unit detail lookup failed
+--
+-- The section layout interleaves fixed-size fields (Level, Health*, Resource*,
+-- CastRemainingMs, CastDurationMs) with length-prefixed strings. The C# Reader
+-- parses these in order; the layout is fixed per PROTOCOL.md §4.2 table.
+--
+-- Returns (section_bytes, is_available). When is_available is false, the
+-- caller skips the section entirely (no TLV entry emitted).
 local function encode_unit_state(unitSpecifier)
     -- unitSpecifier: e.g. "player", "player.target"
     local buf = ""
@@ -417,16 +523,31 @@ local function encode_unit_state(unitSpecifier)
     return buf, avail
 end
 
--- Encode abilities list section
+-- Build the abilities list section (PROTOCOL.md §4.3).
+--
+-- Each ability record is a fixed 46 bytes for efficient random-access parsing:
+-- the C# Reader can compute record offsets without per-record length scanning.
+-- AbilityId is space-padded to 32 bytes; a first byte of '\0' marks an empty slot.
+-- Count is capped at 128 to keep total section size predictable.
+--
+-- Returns (section_bytes, is_known). A successful inventory query sets is_known
+-- even when count is zero, allowing the Reader to distinguish known-empty from
+-- unavailable telemetry. The current stub leaves is_known false.
 local function encode_abilities()
     local buf = ""
     local count = 0
+    local isKnown = false
     local records = ""
 
     -- TODO: Use Inspect.Ability.New.List() and Inspect.Ability.New.Detail()
     -- local ids = Inspect.Ability.New.List()
     -- if ids then
+    --     local complete = true
     --     for _, abilityId in ipairs(ids) do
+    --         if count >= 128 then
+    --             complete = false
+    --             break
+    --         end
     --         local detail = Inspect.Ability.New.Detail(abilityId)
     --         if detail then
     --             local rec = string.rep("\0", 46)
@@ -444,26 +565,42 @@ local function encode_abilities()
     --             rec = write_u8(rec, 46, 0) -- resource cost (simplified)
     --             records = records .. rec
     --             count = count + 1
-    --             if count >= 128 then break end
+    --         else
+    --             complete = false
     --         end
     --     end
+    --     isKnown = complete
     -- end
 
     buf = write_u16_le(buf, 1, count)
     buf = buf .. records
-    return buf, count > 0
+    return buf, isKnown
 end
 
--- Encode auras list section
+-- Build an auras list section (PROTOCOL.md §4.4).
+--
+-- Each aura record is a fixed 70 bytes. RemainingMs is a signed int16 value:
+-- 0..32767 milliseconds are representable and -1 means unknown. Longer aura
+-- durations cannot be encoded safely by V5 and require a future protocol.
+-- Count is capped at 64.
+--
+-- Returns (section_bytes, is_known), including a zero-count section after a
+-- successful query. The current stub leaves is_known false.
 local function encode_auras(unitSpecifier)
     local buf = ""
     local count = 0
+    local isKnown = false
     local records = ""
 
     -- TODO: Use Inspect.Buff.List(unitSpecifier) and Inspect.Buff.Detail()
     -- local buffIds = Inspect.Buff.List(unitSpecifier)
     -- if buffIds then
+    --     local complete = true
     --     for _, buffId in ipairs(buffIds) do
+    --         if count >= 64 then
+    --             complete = false
+    --             break
+    --         end
     --         local detail = Inspect.Buff.Detail(unitSpecifier, buffId)
     --         if detail then
     --             local rec = string.rep("\0", 70)
@@ -485,22 +622,38 @@ local function encode_auras(unitSpecifier)
     --             rec = write_u16_le(rec, 69, remain)
     --             records = records .. rec
     --             count = count + 1
-    --             if count >= 64 then break end
+    --         else
+    --             complete = false
     --         end
     --     end
+    --     isKnown = complete
     -- end
 
     buf = write_u16_le(buf, 1, count)
     buf = buf .. records
-    return buf, count > 0
+    return buf, isKnown
 end
 
 ----------------------------------------------------------------------
 -- Frame emission
+--
+-- Each frame cycle:
+--   1. build_payload() collects all available sections into a TLV payload
+--   2. write_frame() writes header+payload into the selected buffer slot,
+--      applies the CRC, and zeroes unused payload space
+--   3. on_update_begin() alternates the target buffer and triggers the write
+--
+-- The function constructs the CRC field after the header and payload. That is
+-- the required logical wire order. Because the current backing value is an
+-- immutable string replaced as a whole, this does not provide observable
+-- in-place CRC-last publication or a stable-address torn-read guarantee.
 ----------------------------------------------------------------------
 
--- Build the complete payload (section data) for a frame.
--- Returns payload string and sectionsMask.
+-- Collect all sections, encode each as TLV (type uint16 LE | length uint16 LE | data),
+-- concatenate into a single payload string, and compute the sectionsMask bitfield.
+-- Sections are emitted in ascending mask order: ProviderInfo → Player → Target →
+-- Abilities → PlayerAuras → TargetAuras (bits 0–5). This ordering is fixed so
+-- the Reader can validate section sequence.
 local function build_payload()
     local payload = ""
     local sectionsMask = 0
@@ -542,7 +695,6 @@ local function build_payload()
         table.insert(sections, {type = SECTION_TARGET_AURAS, data = tAuraBytes, mask = MASK_TARGET_AURAS})
     end
 
-    -- Encode sections as TLV
     for _, section in ipairs(sections) do
         payload = write_u16_le(payload, #payload + 1, section.type)
         payload = write_u16_le(payload, #payload + 1, #section.data)
@@ -553,8 +705,22 @@ local function build_payload()
     return payload, sectionsMask
 end
 
--- Write one frame into a specific buffer slot (offset within the region string).
--- Returns the updated region string.
+-- Write one complete frame into the specified buffer slot.
+--
+-- Logical CRC-last construction order:
+--   1. Write header fields (sequence, frameTime, sectionsMask, ... flags, reserved)
+--   2. Write payload bytes
+--   3. Zero remaining payload space (prevents stale data from prior writes)
+--   4. Zero the CRC field → compute CRC32 over header[0..23]+payload → write CRC
+--
+-- If the payload exceeds BUFFER_SLOT_SIZE-HEADER_SIZE (8164 bytes), publish
+-- nothing: leave both slots untouched and roll back the local sequence. A fresh
+-- heartbeat would hide data loss and could make a preserved combat snapshot
+-- appear current. Leaving the prior frame in place makes the Reader age it stale.
+--
+-- The CRC covers exactly header bytes 0–23 (Sequence through Reserved, 24 bytes)
+-- plus the full PayloadLength bytes, per PROTOCOL.md §5.2. The CRC field itself
+-- (bytes 24–27) is excluded from coverage (zeroed during computation).
 local function write_frame(region, bufferOffset)
     sequence = sequence + 1
     local frameTime = math.floor((Inspect.Time.Frame() or 0) * 1000)
@@ -567,13 +733,8 @@ local function write_frame(region, bufferOffset)
     local payloadLength = #payload
 
     if payloadLength > BUFFER_SLOT_SIZE - HEADER_SIZE then
-        -- Payload too large; emit minimal provider-only frame
-        local provBytes, provMask = encode_provider_info()
-        payload = write_u16_le("", 1, SECTION_PROVIDER_INFO)
-        payload = write_u16_le(payload, 3, #provBytes)
-        payload = payload .. provBytes
-        payloadLength = #payload
-        sectionsMask = provMask
+        sequence = sequence - 1
+        return region
     end
 
     -- Write header
@@ -585,7 +746,10 @@ local function write_frame(region, bufferOffset)
     region = write_u8(region, bufferOffset + HDR_PROTOCOL_VERSION + 1, PROTOCOL_VERSION)
 
     local flags = 0
-    -- Mark as heartbeat if only provider info present (no game state sections)
+    -- Heartbeat classification: a frame with only ProviderInfo (no game-state
+    -- sections) is marked as a heartbeat. The Reader uses heartbeats for
+    -- freshness/liveness checks only — it MUST NOT treat them as valid game
+    -- state updates. Heartbeat frames still increment Sequence.
     if sectionsMask == MASK_PROVIDER_INFO then
         flags = bor(flags, 0x01)
     end
@@ -620,13 +784,26 @@ end
 
 ----------------------------------------------------------------------
 -- Frame handler — called each frame via Event.System.Update.Begin
+--
+-- Alternating double-buffer write:
+--   Frame 1 → Buffer A (offset 16),   writeBufferIndex flips to 1
+--   Frame 2 → Buffer B (offset 8208), writeBufferIndex flips to 0
+--   Frame 3 → Buffer A, ...
+--
+-- With stable mutable backing storage, this pattern would leave one slot
+-- untouched while the other is updated, and CRC-last publication would detect
+-- a read of the active slot. The current immutable-string skeleton only
+-- preserves the logical A/B contents; it does not yet provide those physical
+-- memory guarantees.
+--
+-- The first call happens synchronously from on_addon_load() to populate
+-- the initial frame before any event-driven update fires.
 ----------------------------------------------------------------------
 local function on_update_begin()
     if not region then
         init_region()
     end
 
-    -- Alternate buffer: 0 -> A (offset 16), 1 -> B (offset 8208)
     local bufferOffset
     if writeBufferIndex == 0 then
         bufferOffset = BUFFER_A_OFFSET
@@ -641,6 +818,22 @@ end
 
 ----------------------------------------------------------------------
 -- Addon lifecycle
+--
+-- RIFT addon entry flow:
+--   1. The game loads BotDsBridge/main.lua and executes it as a script.
+--   2. The final line `on_addon_load()` runs.
+--   3. on_addon_load initializes the region, attaches to Event.System.Update.Begin
+--      via Command.Event.Attach, then immediately calls on_update_begin() to
+--      produce the first frame.
+--   4. Subsequently, on_update_begin fires once per rendered frame.
+--
+-- Event attachment uses pcall to prevent the addon from crashing the client
+-- if the RIFT API surface differs from expectations (e.g., missing Event
+-- tables in future client versions).
+--
+-- The SessionId is regenerated on every addon load (/reloadui). A new
+-- SessionId with Sequence=1 signals a fresh session to the Reader; the
+-- old session's sequence counter is discarded.
 ----------------------------------------------------------------------
 local function on_addon_load()
     init_region()

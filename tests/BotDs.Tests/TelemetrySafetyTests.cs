@@ -624,8 +624,75 @@ public sealed class TelemetrySafetyTests
             PlayerAuras: [],
             TargetAuras: []);
 
+        Assert.False(frame.IsAbilitiesKnown);
         Assert.False(frame.IsPlayerAurasKnown);
         Assert.False(frame.IsTargetAurasKnown);
+    }
+
+    // =====================================================================
+    // 7. IsAbilitiesKnown: mapper omitted-vs-present-empty
+    // =====================================================================
+
+    [Fact]
+    public void V5HealthMapper_OmittedAbilitiesMask_AbilitiesKnownFalse()
+    {
+        // Contract: omitted abilities section mask bit → abilities-known false.
+        V5BufferHeader header = CreateHeader(
+            V5Constants.MaskProviderInfo
+            | V5Constants.MaskPlayer
+            | V5Constants.MaskTarget);
+
+        ParsedV5Frame frame = CreateParsedFrame(header);
+        StableReadResult result = StableReadResult.Healthy(frame);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        TelemetryFrame telemetry = V5HealthMapper.ToTelemetryFrame(result, now);
+
+        Assert.False(telemetry.IsAbilitiesKnown);
+        Assert.Empty(telemetry.Abilities);
+    }
+
+    [Fact]
+    public void V5HealthMapper_PresentEmptyAbilitiesMask_AbilitiesKnownTrue()
+    {
+        // Contract: present empty abilities section → abilities-known true.
+        V5BufferHeader header = CreateHeader(
+            V5Constants.MaskProviderInfo
+            | V5Constants.MaskPlayer
+            | V5Constants.MaskTarget
+            | V5Constants.MaskAbilities);
+
+        ParsedV5Frame frame = CreateParsedFrame(header);
+        StableReadResult result = StableReadResult.Healthy(frame);
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        TelemetryFrame telemetry = V5HealthMapper.ToTelemetryFrame(result, now);
+
+        Assert.True(telemetry.IsAbilitiesKnown);
+        Assert.Empty(telemetry.Abilities);
+    }
+
+    [Fact]
+    public void V5HealthMapper_NullFrame_AbilitiesKnownFalse()
+    {
+        // Contract: null/fault frames → abilities-known false.
+        StableReadResult faulted = StableReadResult.Faulted("something broke");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        TelemetryFrame frame = V5HealthMapper.ToTelemetryFrame(faulted, now);
+
+        Assert.False(frame.IsAbilitiesKnown);
+    }
+
+    [Fact]
+    public void V5HealthMapper_Disconnected_NoFrame_AbilitiesKnownFalse()
+    {
+        StableReadResult disconnected = StableReadResult.Disconnected("transport lost");
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        TelemetryFrame frame = V5HealthMapper.ToTelemetryFrame(disconnected, now);
+
+        Assert.False(frame.IsAbilitiesKnown);
     }
 
     [Fact]
@@ -663,7 +730,8 @@ public sealed class TelemetrySafetyTests
                     IsPassive: null),
             },
             PlayerAuras: [],
-            TargetAuras: []);
+            TargetAuras: [],
+            IsAbilitiesKnown: true);
         // No IsPlayerAurasKnown/IsTargetAurasKnown passed → defaults false.
 
         var evaluator = new CombatEvaluator(MaxAge);
@@ -751,6 +819,7 @@ public sealed class TelemetrySafetyTests
         },
         PlayerAuras: playerAuras ?? [],
         TargetAuras: targetAuras ?? [],
+        IsAbilitiesKnown: true,
         IsPlayerAurasKnown: playerAurasKnown,
         IsTargetAurasKnown: targetAurasKnown);
 
@@ -812,6 +881,7 @@ public sealed class TelemetrySafetyTests
             },
             PlayerAuras: [],
             TargetAuras: [],
+            IsAbilitiesKnown: true,
             IsPlayerAurasKnown: true,
             IsTargetAurasKnown: true);
     }

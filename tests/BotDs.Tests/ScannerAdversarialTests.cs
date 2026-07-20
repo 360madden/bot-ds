@@ -1007,6 +1007,33 @@ public sealed class ScannerAdversarialTests
             null, null, [], [], [], 0);
     }
 
+    private static ParsedV5Frame MkFrameWithMaskCrcProtoFlags(
+        Guid sid,
+        uint seq,
+        uint mask,
+        uint crc,
+        byte protoVer,
+        byte flags,
+        uint producerMs = 0,
+        uint heartbeatIntervalMs = 0,
+        uint payloadLength = 0)
+    {
+        return new ParsedV5Frame(
+            new V5BufferHeader
+            {
+                Sequence = seq,
+                ProducerFrameMs = producerMs,
+                SectionsMask = mask,
+                HeartbeatIntervalMs = heartbeatIntervalMs,
+                PayloadLength = payloadLength,
+                Crc32 = crc,
+                ProtocolVersion = protoVer,
+                Flags = flags,
+            },
+            new ParsedProviderInfo(sid, producerMs, 500, "t", 1),
+            null, null, [], [], [], 0);
+    }
+
     /// <summary>Place a complete V5 region layout into an existing byte array at the given offset.</summary>
     private static void PlaceV5Region_Into(byte[] target, int offset,
         Guid? sessionId = null, uint seqA = 1, uint seqB = 2)
@@ -1337,5 +1364,150 @@ public sealed class ScannerAdversarialTests
 
         // After double-dispose, further Read throws
         Assert.Throws<ObjectDisposedException>(() => svc.Read());
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // 24. Concurrent read + dispose race
+    // ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ConcurrentReadAndDispose_DoesNotDeadlockOrCorrupt()
+    {
+        var cat = new FakeMemoryCatalog();
+        ScannerTestHelpers.PlaceV5Region(cat, 0x1000000, sessionId: Guid.NewGuid(), seqA: 1, seqB: 2);
+        var factory = new FakeMemoryReaderFactory();
+        factory.RegisterProcess(42, cat);
+        var svc = new V5ScannerService(new ProcessSelector { ProcessId = 42 },
+            TimeSpan.FromSeconds(5), readerFactory: factory);
+
+        // Warm up
+        Assert.True(svc.Read().IsUsable);
+
+        // Concurrent read + dispose — must not deadlock and must settle consistently
+        var tasks = new Task[4];
+        for (int i = 0; i < 2; i++)
+            tasks[i] = Task.Run(() =>
+            {
+                try { svc.Read(); } catch (ObjectDisposedException) { }
+            });
+        for (int i = 2; i < 4; i++)
+            tasks[i] = Task.Run(() => svc.Dispose());
+
+        await Task.WhenAll(tasks);
+        // After all tasks complete, the service should be disposed
+        Assert.Throws<ObjectDisposedException>(() => svc.Read());
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // 25. Dedup flag/protocol version conflict
+    // ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Select_SameSessionSameSeq_DifferentFlags_Ambiguous()
+    {
+        Guid s = Guid.NewGuid();
+        // Identical identity except for Flags
+        var fa = MkFrameWithMaskCrcProtoFlags(s, 42, 0x01, 0xCAFECAFE, V5Constants.ProtocolVersion, 0x00);
+        var fb = MkFrameWithMaskCrcProtoFlags(s, 42, 0x01, 0xCAFECAFE, V5Constants.ProtocolVersion, V5Constants.FlagIsHeartbeat);
+        var r = V5FrameSelector.Select(fa, fb, out _);
+        Assert.Equal(V5SelectionResult.Ambiguous, r);
+    }
+
+    [Fact]
+    public void Select_SameSessionSameSeq_DifferentProtocolVersion_Ambiguous()
+    {
+        Guid s = Guid.NewGuid();
+        var fa = MkFrameWithMaskCrcProtoFlags(s, 42, 0x01, 0xCAFECAFE, 5, 0x00);
+        var fb = MkFrameWithMaskCrcProtoFlags(s, 42, 0x01, 0xCAFECAFE, 6, 0x00);
+        var r = V5FrameSelector.Select(fa, fb, out _);
+        Assert.Equal(V5SelectionResult.Ambiguous, r);
+    }
+
+    [Fact]
+    public void Select_SameSessionSameSeq_DifferentHeartbeatInterval_Ambiguous()
+    {
+        Guid s = Guid.NewGuid();
+        var fa = MkFrameWithMaskCrcProtoFlags(s, 42, 0x01, 0xCAFECAFE, 5, 0, heartbeatIntervalMs: 100);
+        var fb = MkFrameWithMaskCrcProtoFlags(s, 42, 0x01, 0xCAFECAFE, 5, 0, heartbeatIntervalMs: 200);
+
+        V5SelectionResult result = V5FrameSelector.Select(fa, fb, out _);
+
+        Assert.Equal(V5SelectionResult.Ambiguous, result);
+    }
+
+    [Fact]
+    public void Select_SameSessionSameSeq_DifferentPayloadLength_Ambiguous()
+    {
+        Guid s = Guid.NewGuid();
+        var fa = MkFrameWithMaskCrcProtoFlags(s, 42, 0x01, 0xCAFECAFE, 5, 0, payloadLength: 32);
+        var fb = MkFrameWithMaskCrcProtoFlags(s, 42, 0x01, 0xCAFECAFE, 5, 0, payloadLength: 64);
+
+        V5SelectionResult result = V5FrameSelector.Select(fa, fb, out _);
+
+        Assert.Equal(V5SelectionResult.Ambiguous, result);
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // 26. ReadExact bounds validation
+    // ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ReadExact_EndAddressOverflow_ThrowsReadFailure()
+    {
+        if (!OperatingSystem.IsWindows() || nint.Size != 8) return;
+
+        int pid = Environment.ProcessId;
+        using var reader = WindowsMemoryReader.Attach(pid, expectedName: null);
+        // Attempt a read that overflows the address range: address near max, size large enough to wrap
+        byte[] buf = new byte[8];
+        nint nearMax = unchecked((nint)0xFFFFFFFFFFFFFFFF);
+        var ex = Assert.Throws<ReaderException>(() => reader.ReadExact(nearMax, buf, 8));
+        Assert.Equal(ReaderFailureCode.ReadFailure, ex.FailureCode);
+    }
+
+    [Fact]
+    public void ReadExact_ExceedsMaxApplicationAddress_ThrowsReadFailure()
+    {
+        if (!OperatingSystem.IsWindows() || nint.Size != 8) return;
+
+        int pid = Environment.ProcessId;
+        using var reader = WindowsMemoryReader.Attach(pid, expectedName: null);
+
+        // Read 1 byte at a valid address within bounds — should succeed
+        var regions = reader.QueryReadableRegions();
+        if (regions.Regions.Count == 0) return;
+
+        // First read should succeed on a valid region
+        byte[] buf2 = new byte[1];
+        reader.ReadExact(regions.Regions[0].BaseAddress, buf2, 1);
+
+        // Then verify a deliberately out-of-range address is rejected
+        nint badAddr = unchecked((nint)0x00007FFFFFFFFFFF); // near max user-space on x64
+        var ex = Assert.Throws<ReaderException>(() => reader.ReadExact(badAddr, buf2, 1));
+        Assert.Equal(ReaderFailureCode.ReadFailure, ex.FailureCode);
+    }
+
+    [Fact]
+    public void ReadExact_NegativeAddress_ThrowsReadFailure()
+    {
+        if (!OperatingSystem.IsWindows() || nint.Size != 8) return;
+
+        int pid = Environment.ProcessId;
+        using var reader = WindowsMemoryReader.Attach(pid, expectedName: null);
+        byte[] buf = new byte[1];
+        var ex = Assert.Throws<ReaderException>(() => reader.ReadExact(unchecked((nint)(-1)), buf, 1));
+        Assert.Equal(ReaderFailureCode.ReadFailure, ex.FailureCode);
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // 27. VerifyName mapping seam (MapWin32Error coverage)
+    // ────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(5, ReaderFailureCode.AccessDenied)]
+    [InlineData(87, ReaderFailureCode.ProcessNotFound)]
+    public void MapWin32Error_UsedByVerifyName(int errorCode, ReaderFailureCode expected)
+    {
+        Assert.Equal(expected, NativeMethods.MapWin32Error(errorCode));
     }
 }

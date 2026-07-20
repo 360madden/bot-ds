@@ -222,7 +222,7 @@ public static class V5Parser
     {
         result = null;
 
-        // ProviderInfo layout: sessionId(16) + wallClock(4) + maxAge(4) + versionLen(2) + version + schema(1) + reserved(1)
+        // ProviderInfo layout: sessionId(16) + producerFrameMs(4) + maxAge(4) + versionLen(2) + version + schema(1) + reserved(1)
         // Minimum to read versionLen field is 26 bytes.
         const int minSizeToReadVersionLen = 26;
 

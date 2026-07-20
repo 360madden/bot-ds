@@ -1081,4 +1081,220 @@ public sealed class V5ScannerServiceTests
         Assert.DoesNotContain("C:\\", r.ReadResult.FailureDetail, StringComparison.Ordinal);
         Assert.True(r.ReadResult.FailureDetail!.Length <= 200);
     }
+
+    // ── Stale backoff ───────────────────────────────────────────
+
+    [Fact]
+    public void StaleBackoff_SuppressesRepeatedRescans()
+    {
+        var cat = new FakeMemoryCatalog();
+        Guid sid = Guid.NewGuid();
+        ScannerTestHelpers.PlaceV5Region(cat, 0x1000000, sessionId: sid, seqA: 1, seqB: 2);
+        var fact = new FakeMemoryReaderFactory();
+        fact.RegisterProcess(42, cat);
+        var tp = new ControllableTimeProvider();
+        using var svc = new V5ScannerService(new ProcessSelector { ProcessId = 42 },
+            TimeSpan.FromMilliseconds(10), readerFactory: fact, timeProvider: tp);
+
+        // First read — healthy, caches sentinel
+        var r1 = svc.Read();
+        Assert.True(r1.IsUsable);
+        Assert.Equal(1, r1.Metrics.FullScanCount);
+
+        // Advance past max age → stale triggers relocation (full scan #2)
+        tp.Advance(TimeSpan.FromMilliseconds(500));
+
+        var r2 = svc.Read();
+        Assert.False(r2.IsUsable);
+        Assert.Equal(ProviderHealth.Stale, r2.ReadResult.TransportHealth);
+        Assert.Equal(2, r2.Metrics.FullScanCount); // relocation scan performed
+        Assert.Equal(0, r2.Metrics.CacheHitCount);
+        Assert.Equal(2, r2.Metrics.CacheMissCount);
+
+        // Third read within backoff window — must NOT trigger another relocation scan
+        tp.Advance(TimeSpan.FromMilliseconds(10));
+        var r3 = svc.Read();
+        Assert.False(r3.IsUsable);
+        Assert.Equal(ProviderHealth.Stale, r3.ReadResult.TransportHealth);
+        Assert.Equal(2, r3.Metrics.FullScanCount); // no additional scan
+
+        // Advance past backoff interval (5s default) — scan allowed again
+        tp.Advance(TimeSpan.FromSeconds(10));
+        var r4 = svc.Read();
+        Assert.False(r4.IsUsable);
+        Assert.Equal(ProviderHealth.Stale, r4.ReadResult.TransportHealth);
+        // The cached stale candidate is revalidated, then one relocation scan is allowed.
+        Assert.Equal(3, r4.Metrics.FullScanCount);
+    }
+
+    [Fact]
+    public void StaleBackoff_StaleCandidateFoundByScanIsNotScannedTwiceInCycle()
+    {
+        var cat = new FakeMemoryCatalog();
+        Guid sessionId = Guid.NewGuid();
+        nint firstAddress = 0x1000000;
+        ScannerTestHelpers.PlaceV5Region(cat, firstAddress, sessionId: sessionId, seqA: 1, seqB: 2);
+        ScannerTestHelpers.PlaceV5Region(cat, 0x2000000, sessionId: sessionId, seqA: 1, seqB: 2);
+        var fact = new FakeMemoryReaderFactory();
+        fact.RegisterProcess(42, cat);
+        var tp = new ControllableTimeProvider();
+        using var svc = new V5ScannerService(new ProcessSelector { ProcessId = 42 },
+            TimeSpan.FromMilliseconds(10), readerFactory: fact, timeProvider: tp);
+
+        Assert.True(svc.Read().IsUsable);
+        tp.Advance(TimeSpan.FromSeconds(1));
+        cat.ModifyPage(firstAddress, 0, [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
+
+        ScannerReadResult result = svc.Read();
+
+        Assert.Equal(ProviderHealth.Stale, result.ReadResult.TransportHealth);
+        Assert.Equal(2, result.Metrics.FullScanCount);
+        Assert.Equal(2, result.Metrics.CacheMissCount);
+    }
+
+    [Fact]
+    public void StaleBackoff_FailedRelocationRetainsCandidateForBackoffRevalidation()
+    {
+        var cat = new FakeMemoryCatalog();
+        ScannerTestHelpers.PlaceV5Region(cat, 0x1000000, sessionId: Guid.NewGuid(), seqA: 1, seqB: 2);
+        var fact = new FakeMemoryReaderFactory();
+        fact.RegisterProcess(42, cat);
+        var tp = new ControllableTimeProvider();
+        using var svc = new V5ScannerService(new ProcessSelector { ProcessId = 42 },
+            TimeSpan.FromMilliseconds(10), readerFactory: fact, timeProvider: tp);
+
+        Assert.True(svc.Read().IsUsable);
+        tp.Advance(TimeSpan.FromMilliseconds(500));
+        cat.MarkEnumerationIncomplete();
+
+        ScannerReadResult failedRelocation = svc.Read();
+        Assert.Equal(ReaderFailureCode.QueryFailure, failedRelocation.FailureCode);
+        Assert.Equal(2, failedRelocation.Metrics.FullScanCount);
+
+        tp.Advance(TimeSpan.FromMilliseconds(10));
+        ScannerReadResult backedOff = svc.Read();
+
+        Assert.Equal(ProviderHealth.Stale, backedOff.ReadResult.TransportHealth);
+        Assert.Equal(ReaderFailureCode.StaleTelemetry, backedOff.FailureCode);
+        Assert.Equal(2, backedOff.Metrics.FullScanCount);
+        Assert.Equal(1, backedOff.Metrics.CacheHitCount);
+    }
+
+    [Fact]
+    public void StaleBackoff_ResetsOnReattach()
+    {
+        var cat = new FakeMemoryCatalog();
+        Guid sid = Guid.NewGuid();
+        ScannerTestHelpers.PlaceV5Region(cat, 0x1000000, sessionId: sid, seqA: 1, seqB: 2);
+        var fact = new FakeMemoryReaderFactory();
+        fact.RegisterProcess(42, cat);
+        var tp = new ControllableTimeProvider();
+        using var svc = new V5ScannerService(new ProcessSelector { ProcessId = 42 },
+            TimeSpan.FromMilliseconds(10), readerFactory: fact, timeProvider: tp);
+
+        // First read healthy
+        Assert.True(svc.Read().IsUsable);
+
+        // Trigger stale + relocation → backoff active
+        tp.Advance(TimeSpan.FromMilliseconds(500));
+        var r2 = svc.Read(); // stale, relocation scan #2
+        Assert.False(r2.IsUsable);
+
+        // Kill the reader (not the process registration) so reattach succeeds
+        fact.GetLastReader(42)!.Kill();
+        var r3 = svc.Read(); // fresh attach, full scan #3
+        Assert.True(r3.IsUsable, r3.ReadResult.FailureDetail ?? r3.FailureCode.ToString());
+        Assert.Equal(2, r3.AttachmentGeneration);
+        Assert.True(r3.Metrics.FullScanCount >= 2,
+            $"Expected at least 2 scans (initial + fresh attach), got {r3.Metrics.FullScanCount}");
+    }
+
+    // ── CandidateLimitHits metric accuracy ──────────────────────
+
+    [Fact]
+    public void CandidateLimitHits_OnlyIncrementedForLimitExceeded()
+    {
+        // Incomplete enumeration (QueryFailure) must NOT increment CandidateLimitHits
+        var cat = new FakeMemoryCatalog();
+        ScannerTestHelpers.PlaceV5Region(cat, 0x1000000, sessionId: Guid.NewGuid(), seqA: 1, seqB: 2);
+        cat.MarkEnumerationIncomplete();
+        var fact = new FakeMemoryReaderFactory();
+        fact.RegisterProcess(42, cat);
+        using var svc = new V5ScannerService(new ProcessSelector { ProcessId = 42 },
+            TimeSpan.FromSeconds(5), readerFactory: fact);
+
+        var r = svc.Read();
+        Assert.False(r.IsUsable);
+        Assert.Equal(ReaderFailureCode.QueryFailure, r.FailureCode);
+        Assert.Equal(0, r.Metrics.CandidateLimitHits);
+    }
+
+    [Fact]
+    public void CandidateLimitHits_IncrementedForMaxCandidatesExceeded()
+    {
+        var cat = new FakeMemoryCatalog();
+        for (int i = 0; i < 5; i++)
+            ScannerTestHelpers.PlaceV5Region(cat, 0x10000 + (i * 0x100000),
+                sessionId: Guid.NewGuid(), seqA: (uint)(i * 2 + 1), seqB: (uint)(i * 2 + 2));
+        var fact = new FakeMemoryReaderFactory();
+        fact.RegisterProcess(42, cat);
+        using var svc = new V5ScannerService(new ProcessSelector { ProcessId = 42 },
+            TimeSpan.FromSeconds(5), readerFactory: fact,
+            scannerOptions: new SentinelScannerOptions { MaxCandidates = 2 });
+
+        var r = svc.Read();
+        Assert.False(r.IsUsable);
+        Assert.Equal(ReaderFailureCode.CandidateLimitExceeded, r.FailureCode);
+        Assert.True(r.Metrics.CandidateLimitHits > 0,
+            "CandidateLimitHits must increment when CandidateLimitExceeded");
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Native error mapping
+// ────────────────────────────────────────────────────────────────────
+
+public sealed class NativeErrorMappingTests
+{
+    [Theory]
+    [InlineData(5, ReaderFailureCode.AccessDenied)]   // ERROR_ACCESS_DENIED
+    [InlineData(87, ReaderFailureCode.ProcessNotFound)] // ERROR_INVALID_PARAMETER
+    [InlineData(0, ReaderFailureCode.OpenFailure)]
+    [InlineData(2, ReaderFailureCode.OpenFailure)]     // ERROR_FILE_NOT_FOUND
+    [InlineData(6, ReaderFailureCode.OpenFailure)]     // ERROR_INVALID_HANDLE
+    public void MapWin32Error_MapsToExpectedCodes(int errorCode, ReaderFailureCode expected)
+    {
+        Assert.Equal(expected, NativeMethods.MapWin32Error(errorCode));
+    }
+}
+
+public sealed class WindowsMemoryReaderRangeTests
+{
+    [Theory]
+    [InlineData(100UL, 1, 100UL, 200UL, true)]
+    [InlineData(200UL, 1, 100UL, 200UL, true)]
+    [InlineData(200UL, 2, 100UL, 200UL, false)]
+    [InlineData(99UL, 1, 100UL, 200UL, false)]
+    [InlineData(201UL, 0, 100UL, 200UL, false)]
+    public void IsRangeWithinApplicationBounds_UsesInclusiveMaximum(
+        ulong address,
+        int size,
+        ulong minimum,
+        ulong maximum,
+        bool expected)
+    {
+        bool actual = WindowsMemoryReader.IsRangeWithinApplicationBounds(
+            (nuint)address, size, (nuint)minimum, (nuint)maximum);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void IsRangeWithinApplicationBounds_DoesNotOverflowAtNativeMaximum()
+    {
+        Assert.True(WindowsMemoryReader.IsRangeWithinApplicationBounds(
+            nuint.MaxValue, 1, 0, nuint.MaxValue));
+        Assert.False(WindowsMemoryReader.IsRangeWithinApplicationBounds(
+            nuint.MaxValue, 2, 0, nuint.MaxValue));
+    }
 }

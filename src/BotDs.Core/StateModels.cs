@@ -119,8 +119,7 @@ public sealed record UnitState(
     HealthState Health,
     ResourceState? Resource,
     bool? InCombat,
-    CastState? Cast,
-    string? Build = null)
+    CastState? Cast)
 {
     public bool IsHostile => string.Equals(Relation, "hostile", StringComparison.OrdinalIgnoreCase);
     public bool IsAvailable => !string.IsNullOrWhiteSpace(Id) && Health.Maximum is > 0 && Health.Current is >= 0;
@@ -158,6 +157,7 @@ public sealed record TelemetryFrame(
     IReadOnlyDictionary<string, AbilityState> Abilities,
     IReadOnlyList<AuraState> PlayerAuras,
     IReadOnlyList<AuraState> TargetAuras,
+    bool IsAbilitiesKnown = false,
     bool IsPlayerAurasKnown = false,
     bool IsTargetAurasKnown = false)
 {
@@ -168,6 +168,7 @@ public sealed record TelemetryFrame(
         ReadOnlyDictionary<string, AbilityState>.Empty,
         [],
         [],
+        IsAbilitiesKnown: false,
         IsPlayerAurasKnown: false,
         IsTargetAurasKnown: false);
 }

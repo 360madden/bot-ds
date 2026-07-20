@@ -32,6 +32,20 @@ public sealed class ControllerStateMachineTests
     }
 
     [Fact]
+    public void ClearStop_DoesNotClearFaultedState()
+    {
+        ControllerStateMachine controller = CreateController();
+        Assert.True(controller.Arm());
+        long generation = controller.Generation;
+        Assert.True(controller.ApplyEvaluation(
+            new EvaluationResult(ControllerState.Faulted, null, []), generation));
+
+        Assert.False(controller.ClearStop());
+
+        Assert.Equal(ControllerState.Faulted, controller.State);
+    }
+
+    [Fact]
     public void ApplyEvaluation_StaleResultCannotMoveControllerOutOfDisarmed()
     {
         ControllerStateMachine controller = CreateController();

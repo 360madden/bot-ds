@@ -8,8 +8,7 @@ public static class V5FrameSelector
 {
     /// <summary>
     /// Select the newer frame. If frames share the same session, sequence, and producer time,
-    /// checks whether the parsed frames carry equivalent protocol identity
-    /// (at minimum: SectionsMask and CRC values are the same).
+    /// checks whether the parsed frames carry equivalent complete header identity.
     /// Equivalent frames return <see cref="V5SelectionResult.Equivalent"/> and a deterministic
     /// representative. Frames that share session+sequence but differ in CRC/header produce
     /// <see cref="V5SelectionResult.Ambiguous"/>.
@@ -42,7 +41,7 @@ public static class V5FrameSelector
 
     /// <summary>
     /// Two frames from the same session with the same sequence number.
-    /// If their protocol identities (SectionsMask, ProducerFrameMs, CRC) match,
+    /// If every non-sequence header field matches,
     /// they are equivalent — return the lower-BufferIndex frame as representative.
     /// Otherwise they conflict and are ambiguous.
     /// </summary>
@@ -50,13 +49,18 @@ public static class V5FrameSelector
         ParsedV5Frame frameA, ParsedV5Frame frameB, out ParsedV5Frame? selected)
     {
         selected = null;
-        bool sameMask = frameA.Header.SectionsMask == frameB.Header.SectionsMask;
-        bool sameProd = frameA.Header.ProducerFrameMs == frameB.Header.ProducerFrameMs;
-        bool sameCrc = frameA.Header.Crc32 == frameB.Header.Crc32;
-        bool sameProtVer = frameA.Header.ProtocolVersion == frameB.Header.ProtocolVersion;
-        bool sameFlags = frameA.Header.Flags == frameB.Header.Flags;
+        V5BufferHeader a = frameA.Header;
+        V5BufferHeader b = frameB.Header;
+        bool sameIdentity = a.ProducerFrameMs == b.ProducerFrameMs
+            && a.SectionsMask == b.SectionsMask
+            && a.HeartbeatIntervalMs == b.HeartbeatIntervalMs
+            && a.PayloadLength == b.PayloadLength
+            && a.ProtocolVersion == b.ProtocolVersion
+            && a.Flags == b.Flags
+            && a.Reserved == b.Reserved
+            && a.Crc32 == b.Crc32;
 
-        if (sameMask && sameProd && sameCrc && sameProtVer && sameFlags)
+        if (sameIdentity)
         {
             selected = frameA.BufferIndex <= frameB.BufferIndex ? frameA : frameB;
             return V5SelectionResult.Equivalent;
@@ -65,7 +69,7 @@ public static class V5FrameSelector
     }
 
     /// <summary>
-    /// SelectBest first deduplicates equivalent candidates (same session/seq/producer-time/CRC),
+    /// SelectBest first deduplicates candidates with equivalent complete header identity,
     /// then finds a unique candidate that is strictly newer than all others.
     /// Returns Ambiguous if two distinct yet conflicting equal-order candidates exist.
     /// </summary>

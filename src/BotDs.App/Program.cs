@@ -25,7 +25,7 @@ try
             formatter: new RenderedCompactJsonFormatter(),
             path: Path.Combine("logs", "botds-.ndjson"),
             rollingInterval: RollingInterval.Day,
-            retainedFileCountLimit: 90,
+            retainedFileCountLimit: 14,
             flushToDiskInterval: TimeSpan.FromSeconds(1)));
 
     builder.Services.AddSingleton<SnapshotPublisher>();
@@ -54,6 +54,14 @@ try
     if (!startupReload.Success)
         Log.Warning("Startup profile reload failed: {Errors}; continuing with empty cache",
             string.Join("; ", startupReload.Errors));
+
+    string? apiToken = builder.Configuration.GetValue<string>("BotDs:Dashboard:ApiToken");
+    string? controlToken = builder.Configuration.GetValue<string>("BotDs:Dashboard:ControlToken");
+
+    if (string.IsNullOrWhiteSpace(apiToken))
+        Log.Warning("BotDs:Dashboard:ApiToken is not configured; read API access is disabled");
+    if (string.IsNullOrWhiteSpace(controlToken))
+        Log.Warning("BotDs:Dashboard:ControlToken is not configured; control operations are disabled");
 
     app.Run();
 }

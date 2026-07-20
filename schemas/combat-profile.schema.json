@@ -12,6 +12,10 @@
     "rules"
   ],
   "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional schema URI used by editors and validation tools."
+    },
     "profileVersion": {
       "type": "integer",
       "description": "Profile schema version. Must be 1.",
@@ -40,18 +44,18 @@
         "minimumLevel": {
           "type": "integer",
           "description": "Minimum character level.",
-          "minimum": 1,
-          "maximum": 75
+          "minimum": 1
         },
         "maximumLevel": {
           "type": "integer",
           "description": "Maximum character level.",
-          "minimum": 1,
-          "maximum": 75
+          "minimum": 1
         },
         "build": {
           "type": "string",
-          "description": "Optional build/soul label, e.g. 'Paragon'."
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "description": "Optional build/soul label, e.g. 'Paragon'. Not supported by the V5 protocol; enabled profiles must not specify a build."
         }
       },
       "additionalProperties": false
@@ -79,20 +83,18 @@
           },
           "required": {
             "type": "boolean",
-            "description": "Whether this ability is required for the profile to function.",
+            "description": "Whether this ability is required when binding is enabled and player level is in range. If true and ability inventory is unknown, evaluation stops with ProviderUnavailable.",
             "default": true
           },
           "minimumLevel": {
             "type": "integer",
             "description": "Minimum character level for this ability.",
-            "minimum": 1,
-            "maximum": 75
+            "minimum": 1
           },
           "maximumLevel": {
             "type": "integer",
             "description": "Maximum character level for this ability.",
-            "minimum": 1,
-            "maximum": 75
+            "minimum": 1
           }
         },
         "additionalProperties": false
@@ -209,5 +211,24 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "not": {
+          "properties": {
+            "enabled": { "const": false }
+          },
+          "required": ["enabled"]
+        }
+      },
+      "then": {
+        "properties": {
+          "character": {
+            "not": { "required": ["build"] }
+          }
+        }
+      }
+    }
+  ],
   "additionalProperties": false
 }

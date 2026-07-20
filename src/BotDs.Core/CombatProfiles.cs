@@ -129,6 +129,13 @@ public static class CombatProfileLoader
                 errors.Add("maximumLevel must be positive.");
             if (profile.Character.MinimumLevel > profile.Character.MaximumLevel)
                 errors.Add("minimumLevel cannot exceed maximumLevel.");
+            if (profile.Character.Build is not null)
+            {
+                if (string.IsNullOrWhiteSpace(profile.Character.Build))
+                    errors.Add("Character build must not be whitespace.");
+                else if (profile.Enabled)
+                    errors.Add("Character build is not supported by the V5 protocol; enabled profiles must not specify a build.");
+            }
         }
 
         if (profile.Abilities is null || profile.Abilities.Count == 0)
@@ -170,13 +177,15 @@ public static class CombatProfileLoader
                     errors.Add("Rule entry is null.");
                     continue;
                 }
-                if (string.IsNullOrWhiteSpace(rule.Id))
+                bool hasRuleId = !string.IsNullOrWhiteSpace(rule.Id);
+                bool hasAbilityAlias = !string.IsNullOrWhiteSpace(rule.Ability);
+                if (!hasRuleId)
                     errors.Add("Rule id is required.");
-                if (string.IsNullOrWhiteSpace(rule.Ability))
-                    errors.Add($"Rule '{rule.Id}' ability is required.");
-                if (!ruleIds.Add(rule.Id))
+                else if (!ruleIds.Add(rule.Id))
                     errors.Add($"Duplicate rule id '{rule.Id}'.");
-                if (profile.Abilities is null || !profile.Abilities.ContainsKey(rule.Ability))
+                if (!hasAbilityAlias)
+                    errors.Add($"Rule '{rule.Id}' ability is required.");
+                else if (profile.Abilities is null || !profile.Abilities.ContainsKey(rule.Ability))
                     errors.Add($"Rule '{rule.Id}' references unknown ability alias '{rule.Ability}'.");
                 if (rule.When is null)
                     errors.Add($"Rule '{rule.Id}' conditions are required.");
@@ -193,6 +202,42 @@ public static class CombatProfileLoader
                     ValidateAuraIds(rule.Id, rule.When.RequiredTargetAuras, nameof(rule.When.RequiredTargetAuras), errors);
                     ValidateAuraIds(rule.Id, rule.When.ForbiddenTargetAuras, nameof(rule.When.ForbiddenTargetAuras), errors);
                 }
+            }
+        }
+
+        // Enabled-profile structural requirements
+        if (profile.Enabled)
+        {
+            if (profile.Abilities is null || !profile.Abilities.Values.Any(b => b is { Enabled: true }))
+                errors.Add("Enabled profile must have at least one enabled ability binding.");
+
+            if (profile.Rules is null || !profile.Rules.Any(r => r is { Enabled: true }))
+                errors.Add("Enabled profile must have at least one enabled rule.");
+
+            if (profile.Abilities is not null && profile.Rules is not null)
+            {
+                foreach (CombatRule rule in profile.Rules.Where(r => r is { Enabled: true }))
+                {
+                    if (!string.IsNullOrWhiteSpace(rule.Ability)
+                        && profile.Abilities.TryGetValue(rule.Ability, out AbilityBinding? binding)
+                        && binding is not null
+                        && !binding.Enabled)
+                        errors.Add($"Enabled rule '{rule.Id}' references disabled ability binding '{rule.Ability}'.");
+                }
+
+                int profileMin = profile.Character?.MinimumLevel ?? 1;
+                int profileMax = profile.Character?.MaximumLevel ?? int.MaxValue;
+                bool hasOverlappingPair = profile.Rules
+                    .Where(r => r is not null && r.Enabled)
+                    .SelectMany(r => (IEnumerable<AbilityBinding>)(
+                        !string.IsNullOrWhiteSpace(r.Ability)
+                        && profile.Abilities.TryGetValue(r.Ability, out AbilityBinding? b)
+                        && b is { Enabled: true }
+                            ? [b]
+                            : []))
+                    .Any(b => (b.MinimumLevel ?? 1) <= profileMax && (b.MaximumLevel ?? int.MaxValue) >= profileMin);
+                if (!hasOverlappingPair && profile.Rules.Any(r => r is not null && r.Enabled))
+                    errors.Add("No enabled rule references an enabled ability binding that overlaps the profile level range.");
             }
         }
 

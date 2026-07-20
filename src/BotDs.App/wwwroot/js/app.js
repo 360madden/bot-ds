@@ -13,6 +13,7 @@
   const ARM_ENDPOINT = "/api/control/arm";
   const DISARM_ENDPOINT = "/api/control/disarm";
   const ESTOP_ENDPOINT = "/api/control/emergency-stop";
+  const CLEAR_STOP_ENDPOINT = "/api/control/clear-stop";
   const STATUS_POLL_MS = 2000;
   const MAX_LOG_ENTRIES = 500;
   const RECONNECT_BASE_MS = 1000;
@@ -84,6 +85,7 @@
   const btnArm = $("btn-arm");
   const btnDisarm = $("btn-disarm");
   const btnEstop = $("btn-estop");
+  const btnClearStop = $("btn-clear-stop");
 
   // Arm dialog
   const armDialog = $("arm-dialog");
@@ -155,6 +157,10 @@
   let sseRetryTimer = null;
   let statusPollTimer = null;
   let sseAbortController = null;
+  let sseReader = null;
+  let activeProfileId = "";
+  let activeProfileEnabled = false;
+  let profileSelectionPending = false;
 
   // ---- Helpers ----
   function setText(id, text) {
@@ -346,15 +352,13 @@
       setHidden(controllerDecisionRow, true);
     }
 
-    // Button states
-    var isStopped = state === "Stopped" || state === "Faulted";
-    var isDisarmed = state === "Disarmed";
-    var isArmed = state === "Armed" || state === "Evaluating" || state === "ActionPending"
-      || state === "WaitingForPlayer" || state === "WaitingForTarget";
-
-    btnArm.disabled = isArmed || isStopped || health === "Disconnected";
-    btnDisarm.disabled = isDisarmed || isStopped;
-    btnEstop.disabled = isDisarmed || isStopped;
+    if (!profileSelectionPending
+      && Object.prototype.hasOwnProperty.call(status, "activeProfileId")) {
+      activeProfileId = status.activeProfileId || "";
+      updateActiveProfileEnabled();
+    } else {
+      refreshControlButtons();
+    }
 
     // Player
     updateUnit("player", status.player);
@@ -399,6 +403,9 @@
       selectedProfileId = "";
       profileDetail.hidden = true;
     }
+
+    // Track whether the currently selected profile is enabled
+    updateActiveProfileEnabled();
   }
 
   function showProfileDetail(id) {
@@ -418,15 +425,57 @@
     setText(profileAbilities, p.abilityCount != null ? p.abilityCount : "0");
   }
 
+  function updateActiveProfileEnabled() {
+    if (!activeProfileId) {
+      activeProfileEnabled = false;
+    } else {
+      var p = profilesData.find(function (x) { return x.id === activeProfileId; });
+      activeProfileEnabled = !!(p && p.enabled === true);
+    }
+    refreshControlButtons();
+  }
+
+  function refreshControlButtons() {
+    if (!lastStatus) {
+      btnArm.disabled = true;
+      btnDisarm.disabled = true;
+      btnEstop.disabled = true;
+      btnClearStop.disabled = true;
+      return;
+    }
+
+    var provider = lastStatus.provider || lastStatus;
+    var ctrl = lastStatus.controller || lastStatus;
+    var health = provider.health || "Disconnected";
+    var state = ctrl.state || ctrl.controllerState || "Disarmed";
+    var isStoppedOrFaulted = state === "Stopped" || state === "Faulted";
+    var isDisarmed = state === "Disarmed";
+    var isArmed = state === "Armed" || state === "Evaluating" || state === "ActionPending"
+      || state === "WaitingForPlayer" || state === "WaitingForTarget";
+    var armClientReady = !profileSelectionPending
+      && !isArmed
+      && !isStoppedOrFaulted
+      && health === "Healthy"
+      && activeProfileEnabled;
+
+    btnArm.disabled = !armClientReady;
+    btnDisarm.disabled = isDisarmed || isStoppedOrFaulted;
+    btnEstop.disabled = isDisarmed || isStoppedOrFaulted;
+    // Faulted is deliberately not clearable. Clear Stop only releases the
+    // explicit Stopped latch.
+    btnClearStop.disabled = state !== "Stopped";
+  }
+
   async function loadProfiles() {
     btnReloadProfiles.disabled = true;
     btnReloadProfiles.textContent = "Loading…";
     try {
-      var profiles = await apiFetch(PROFILES_ENDPOINT);
-      if (!Array.isArray(profiles) && profiles.activeProfileId) {
-        selectedProfileId = profiles.activeProfileId;
+      var response = await apiFetch(PROFILES_ENDPOINT);
+      if (!Array.isArray(response) && !profileSelectionPending) {
+        activeProfileId = response.activeProfileId || "";
+        selectedProfileId = activeProfileId;
       }
-      populateProfileSelect(Array.isArray(profiles) ? profiles : (profiles.profiles || []));
+      populateProfileSelect(Array.isArray(response) ? response : (response.profiles || []));
     } catch (err) {
       addLogEntry("error", "profiles", "Failed to load profiles: " + err.message);
       populateProfileSelect([]);
@@ -513,15 +562,34 @@
     sseStatusText.textContent = labels[state] || state;
   }
 
+  function clearSseRetryTimer() {
+    if (sseRetryTimer) {
+      clearTimeout(sseRetryTimer);
+      sseRetryTimer = null;
+    }
+  }
+
+  function resetSseRetries() {
+    clearSseRetryTimer();
+    sseRetryCount = 0;
+  }
+
   async function connectSSE() {
+    // Do not open SSE when there is no token; fall back to polling only.
+    if (!getToken()) {
+      setSseState("disconnected");
+      return;
+    }
+
     if (sseAbortController) {
       sseAbortController.abort();
     }
-
     var controller = new AbortController();
     sseAbortController = controller;
     setSseState("connecting");
 
+    var retryError = null;
+    var reader = null;
     try {
       var headers = { "Accept": "text/event-stream" };
       var token = getToken();
@@ -538,12 +606,14 @@
 
       setSseState("connected");
       sseRetryCount = 0;
-      var reader = response.body.getReader();
+      reader = response.body.getReader();
+      sseReader = reader;
       var decoder = new TextDecoder();
       var pending = "";
 
       while (!controller.signal.aborted) {
         var result = await reader.read();
+
         if (result.done) break;
         pending += decoder.decode(result.value, { stream: true }).replace(/\r\n/g, "\n");
         var boundary;
@@ -569,12 +639,31 @@
       if (controller.signal.aborted) return;
       setSseState("error");
       addLogEntry("warn", "sse", "Event stream unavailable: " + err.message);
-      scheduleSseRetry();
+      retryError = err;
+    } finally {
+      if (reader) {
+        try {
+          await reader.cancel();
+        } catch {
+          // Abort and connection failures can make cancellation reject.
+        }
+        try {
+          reader.releaseLock();
+        } catch {
+          // The stream may already have released its lock.
+        }
+      }
+      if (sseReader === reader) sseReader = null;
+      if (sseAbortController === controller) sseAbortController = null;
     }
+
+    if (retryError && !controller.signal.aborted) scheduleSseRetry();
   }
 
   function scheduleSseRetry() {
     if (sseRetryTimer) return;
+    // Do not schedule retries when there is no token.
+    if (!getToken()) return;
     var delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, sseRetryCount), RECONNECT_MAX_MS);
     sseRetryCount++;
     sseRetryTimer = setTimeout(function () {
@@ -680,6 +769,11 @@
       }
     });
 
+    // Clear Stop
+    btnClearStop.addEventListener("click", function () {
+      doControlAction(CLEAR_STOP_ENDPOINT, "Clear Stop");
+    });
+
     // Profiles
     btnReloadProfiles.addEventListener("click", function () {
       addLogEntry("info", "profiles", "Reloading profiles…");
@@ -694,18 +788,42 @@
     });
 
     profileSelect.addEventListener("change", function () {
-      selectedProfileId = profileSelect.value;
-      showProfileDetail(selectedProfileId);
-      // POST active profile selection
-      if (selectedProfileId) {
-        apiFetch("/api/control/profile", "POST", { profileId: selectedProfileId })
-          .then(function () {
-            addLogEntry("info", "profiles", "Active profile: " + selectedProfileId);
-          })
-          .catch(function (err) {
-            addLogEntry("warn", "profiles", "Profile select failed: " + err.message);
-          });
+      var requestedProfileId = profileSelect.value;
+      var previousActiveProfileId = activeProfileId;
+      if (!requestedProfileId) {
+        selectedProfileId = previousActiveProfileId;
+        profileSelect.value = previousActiveProfileId;
+        showProfileDetail(previousActiveProfileId);
+        updateActiveProfileEnabled();
+        return;
       }
+
+      selectedProfileId = requestedProfileId;
+      showProfileDetail(requestedProfileId);
+      profileSelectionPending = true;
+      activeProfileId = "";
+      profileSelect.disabled = true;
+      updateActiveProfileEnabled();
+      // POST active profile selection
+      apiFetch("/api/control/profile", "POST", { profileId: requestedProfileId })
+        .then(function () {
+          profileSelectionPending = false;
+          activeProfileId = requestedProfileId;
+          updateActiveProfileEnabled();
+          addLogEntry("info", "profiles", "Active profile: " + requestedProfileId);
+        })
+        .catch(function (err) {
+          profileSelectionPending = false;
+          activeProfileId = previousActiveProfileId;
+          selectedProfileId = previousActiveProfileId;
+          profileSelect.value = previousActiveProfileId;
+          showProfileDetail(previousActiveProfileId);
+          updateActiveProfileEnabled();
+          addLogEntry("warn", "profiles", "Profile select failed: " + err.message);
+        })
+        .finally(function () {
+          profileSelect.disabled = profilesData.length === 0;
+        });
     });
 
     // Log controls
@@ -725,6 +843,15 @@
   }
 
   function reconnectAll() {
+    // Clear any pending retry/keepalive timers to prevent accumulation.
+    resetSseRetries();
+    if (sseAbortController) {
+      sseAbortController.abort();
+      sseAbortController = null;
+    }
+    if (sseReader) {
+      sseReader.cancel().catch(function () { });
+    }
     loadProfiles();
     connectSSE();
     startPolling();

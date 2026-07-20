@@ -130,7 +130,7 @@ internal static class V5SentinelScanner
     /// </summary>
     private static List<V5Candidate> Deduplicate(List<V5Candidate> candidates)
     {
-        var seen = new HashSet<(Guid, uint, uint, uint, uint)>();
+        var seen = new HashSet<(Guid, uint, uint, uint, uint, uint, byte, byte, ushort, uint)>();
         var result = new List<V5Candidate>(candidates.Count);
         foreach (var c in candidates)
         {
@@ -150,7 +150,8 @@ internal static class V5SentinelScanner
             }
 
             var key = (rep.Provider.SessionId, rep.Header.Sequence, rep.Header.ProducerFrameMs,
-                rep.Header.SectionsMask, rep.Header.Crc32);
+                rep.Header.SectionsMask, rep.Header.HeartbeatIntervalMs, rep.Header.PayloadLength,
+                rep.Header.ProtocolVersion, rep.Header.Flags, rep.Header.Reserved, rep.Header.Crc32);
             if (seen.Add(key)) result.Add(c);
         }
         return result;

@@ -203,12 +203,33 @@ public sealed class CoreSafetyTests
     }
 
     // =====================================================================
-    // Requirement 2: Profile Build without telemetry build identity.
+    // Requirement 2: Profile Build identity not observable by V5.
     // =====================================================================
 
     [Fact]
-    public void Evaluate_ProfileRequiresBuild_TelemetryHasNone_FailsClosed()
+    public void Validate_EnabledProfile_NonblankBuild_Rejected()
     {
+        // Enabled profiles must not specify a build because V5 cannot observe it.
+        var profile = CreateCompatibleProfile() with
+        {
+            Character = new CharacterRequirements
+            {
+                Calling = "Warrior",
+                MinimumLevel = 1,
+                MaximumLevel = 75,
+                Build = "MyBuild",
+            },
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("build", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Evaluate_ProfileRequiresBuild_DefenseInDepth_Stops()
+    {
+        // Even if an enabled profile with Build bypasses in-memory construction,
+        // the evaluator defense-in-depth catches it.
         var profile = CreateCompatibleProfile() with
         {
             Character = new CharacterRequirements
@@ -221,35 +242,6 @@ public sealed class CoreSafetyTests
         };
 
         TelemetryFrame frame = CreateHealthyFrame();
-        // Player has no Build set (null default).
-        frame = frame with { Player = CreatePlayerState() };
-
-        var evaluator = new CombatEvaluator(MaxAge);
-        EvaluationResult result = evaluator.Evaluate(profile, frame);
-        Assert.Equal(StopReason.ProfileMismatch, result.StopReason);
-        Assert.Contains("build", result.Message!, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("MyBuild", result.Message!, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Evaluate_ProfileRequiresBuild_TelemetryBuildMismatches_FailsClosed()
-    {
-        var profile = CreateCompatibleProfile() with
-        {
-            Character = new CharacterRequirements
-            {
-                Calling = "Warrior",
-                MinimumLevel = 1,
-                MaximumLevel = 75,
-                Build = "ExpectedBuild",
-            },
-        };
-
-        TelemetryFrame frame = CreateHealthyFrame() with
-        {
-            Player = CreatePlayerState() with { Build = "DifferentBuild" },
-        };
-
         var evaluator = new CombatEvaluator(MaxAge);
         EvaluationResult result = evaluator.Evaluate(profile, frame);
         Assert.Equal(StopReason.ProfileMismatch, result.StopReason);
@@ -257,34 +249,7 @@ public sealed class CoreSafetyTests
     }
 
     [Fact]
-    public void Evaluate_ProfileRequiresBuild_TelemetryBuildMatches_Passes()
-    {
-        var profile = CreateCompatibleProfile() with
-        {
-            Character = new CharacterRequirements
-            {
-                Calling = "Warrior",
-                MinimumLevel = 1,
-                MaximumLevel = 75,
-                Build = "MyBuild",
-            },
-        };
-
-        TelemetryFrame frame = CreateHealthyFrame() with
-        {
-            Player = CreatePlayerState() with { Build = "MyBuild" },
-        };
-
-        var evaluator = new CombatEvaluator(MaxAge);
-        EvaluationResult result = evaluator.Evaluate(profile, frame);
-        // Should not stop on ProfileMismatch; the frame has a matching target+rule
-        // so it reaches Armed.
-        Assert.NotEqual(StopReason.ProfileMismatch, result.StopReason);
-        Assert.Equal(ControllerState.Armed, result.State);
-    }
-
-    [Fact]
-    public void Evaluate_ProfileNoBuildRequirement_TelemetryHasNoBuild_Passes()
+    public void Evaluate_ProfileNullBuild_Passes()
     {
         var profile = CreateCompatibleProfile() with
         {
@@ -297,18 +262,14 @@ public sealed class CoreSafetyTests
             },
         };
 
-        TelemetryFrame frame = CreateHealthyFrame() with
-        {
-            Player = CreatePlayerState() with { Build = null },
-        };
-
+        TelemetryFrame frame = CreateHealthyFrame();
         var evaluator = new CombatEvaluator(MaxAge);
         EvaluationResult result = evaluator.Evaluate(profile, frame);
         Assert.NotEqual(StopReason.ProfileMismatch, result.StopReason);
     }
 
     [Fact]
-    public void Evaluate_ProfileEmptyBuildRequirement_TelemetryHasNoBuild_Passes()
+    public void Evaluate_ProfileEmptyBuild_DefenseInDepth_Stops()
     {
         var profile = CreateCompatibleProfile() with
         {
@@ -321,19 +282,49 @@ public sealed class CoreSafetyTests
             },
         };
 
-        TelemetryFrame frame = CreateHealthyFrame() with
-        {
-            Player = CreatePlayerState() with { Build = null },
-        };
-
+        TelemetryFrame frame = CreateHealthyFrame();
         var evaluator = new CombatEvaluator(MaxAge);
         EvaluationResult result = evaluator.Evaluate(profile, frame);
-        Assert.NotEqual(StopReason.ProfileMismatch, result.StopReason);
+        Assert.Equal(StopReason.ProfileMismatch, result.StopReason);
+        Assert.Contains("build", result.Message!, StringComparison.OrdinalIgnoreCase);
     }
 
-    // =====================================================================
-    // Adversarial edge cases.
-    // =====================================================================
+    [Fact]
+    public void Validate_DisabledProfile_NonblankBuild_Passes()
+    {
+        var profile = CreateCompatibleProfile() with
+        {
+            Enabled = false,
+            Character = new CharacterRequirements
+            {
+                Calling = "Warrior",
+                MinimumLevel = 1,
+                MaximumLevel = 75,
+                Build = "MyBuild",
+            },
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
+    public void UnitState_NoBuildProperty_AnyBuildReferenceCausesCompileError()
+    {
+        // UnitState.Build has been removed because V5 cannot observe it.
+        // This test confirms a unit state can be constructed without Build.
+        var unit = new UnitState(
+            Id: "player-1",
+            Name: "Test",
+            Level: 45,
+            Calling: "Warrior",
+            IsPlayer: true,
+            Relation: null,
+            Health: new HealthState(100, 100),
+            Resource: null,
+            InCombat: true,
+            Cast: null);
+        Assert.NotNull(unit);
+    }
 
     [Fact]
     public void Evaluate_DegradedProvider_FailsClosed()
@@ -388,30 +379,6 @@ public sealed class CoreSafetyTests
         TelemetryFrame frame = CreateHealthyFrame(DateTimeOffset.UtcNow);
         EvaluationResult result = evaluator.Evaluate(CreateCompatibleProfile(), frame);
         Assert.NotEqual(StopReason.TelemetryStale, result.StopReason);
-    }
-
-    [Fact]
-    public void Evaluate_BuildCaseInsensitiveMatch_Passes()
-    {
-        var profile = CreateCompatibleProfile() with
-        {
-            Character = new CharacterRequirements
-            {
-                Calling = "Warrior",
-                MinimumLevel = 1,
-                MaximumLevel = 75,
-                Build = "MyBuild",
-            },
-        };
-
-        TelemetryFrame frame = CreateHealthyFrame() with
-        {
-            Player = CreatePlayerState() with { Build = "mybuild" },
-        };
-
-        var evaluator = new CombatEvaluator(MaxAge);
-        EvaluationResult result = evaluator.Evaluate(profile, frame);
-        Assert.NotEqual(StopReason.ProfileMismatch, result.StopReason);
     }
 
     // =====================================================================
@@ -475,7 +442,8 @@ public sealed class CoreSafetyTests
                     IsPassive: null),
             },
             PlayerAuras: [],
-            TargetAuras: []);
+            TargetAuras: [],
+            IsAbilitiesKnown: true);
     }
 
     private static UnitState CreatePlayerState() => new(

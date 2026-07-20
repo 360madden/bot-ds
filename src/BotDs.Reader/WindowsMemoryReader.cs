@@ -6,11 +6,14 @@ internal sealed class WindowsMemoryReader : IMemoryReader
 {
     private readonly SafeProcessHandle _handle;
     private readonly int _processId;
+    private readonly nuint _minAddress;
+    private readonly nuint _maxAddress;
     private volatile bool _disposed;
 
-    private WindowsMemoryReader(SafeProcessHandle handle, int processId)
+    private WindowsMemoryReader(SafeProcessHandle handle, int processId, nuint minAddress, nuint maxAddress)
     {
         _handle = handle; _processId = processId;
+        _minAddress = minAddress; _maxAddress = maxAddress;
     }
 
     public int ProcessId => _processId;
@@ -47,7 +50,9 @@ internal sealed class WindowsMemoryReader : IMemoryReader
         }
         catch { handle.Dispose(); throw; }
 
-        return new WindowsMemoryReader(handle, processId);
+        nuint minAddr = (nuint)sysInfo.lpMinimumApplicationAddress;
+        nuint maxAddr = (nuint)sysInfo.lpMaximumApplicationAddress;
+        return new WindowsMemoryReader(handle, processId, minAddr, maxAddr);
     }
 
     private static void VerifyProcessName(SafeProcessHandle handle, int pid, string expectedName)
@@ -59,7 +64,7 @@ internal sealed class WindowsMemoryReader : IMemoryReader
             if (!NativeMethods.QueryFullProcessImageNameW(handle, 0, buf, ref size))
             {
                 int err = Marshal.GetLastWin32Error();
-                throw new ReaderException(ReaderFailureCode.OpenFailure, $"QueryFullProcessImageName failed (win32={err})");
+                throw new ReaderException(NativeMethods.MapWin32Error(err), $"QueryFullProcessImageName failed (win32={err})");
             }
             string path = Marshal.PtrToStringUni(buf, (int)size) ?? "";
             string img = Path.GetFileName(path);
@@ -74,8 +79,8 @@ internal sealed class WindowsMemoryReader : IMemoryReader
         if (_disposed) throw new ObjectDisposedException(nameof(WindowsMemoryReader));
         if (size < 0 || size > buffer.Length)
             throw new ReaderException(ReaderFailureCode.ReadFailure, "Buffer too small");
-        NativeMethods.GetNativeSystemInfo(out var si);
-        if ((nuint)address < (nuint)si.lpMinimumApplicationAddress || (nuint)address > (nuint)si.lpMaximumApplicationAddress)
+        nuint addr = (nuint)address;
+        if (!IsRangeWithinApplicationBounds(addr, size, _minAddress, _maxAddress))
             throw new ReaderException(ReaderFailureCode.ReadFailure, "Address out of range");
 
         bool ok = NativeMethods.ReadProcessMemory(_handle, address, buffer, (nuint)size, out nuint br);
@@ -83,13 +88,30 @@ internal sealed class WindowsMemoryReader : IMemoryReader
             throw new ReaderException(ReaderFailureCode.ReadFailure, $"RPM failed (win32={Marshal.GetLastWin32Error()}, read={br}, req={size})");
     }
 
+    internal static bool IsRangeWithinApplicationBounds(
+        nuint address,
+        int size,
+        nuint minimumAddress,
+        nuint maximumAddress)
+    {
+        if (size < 0 || minimumAddress > maximumAddress)
+            return false;
+        if (address < minimumAddress || address > maximumAddress)
+            return false;
+        if (size == 0)
+            return true;
+
+        // maximumAddress is inclusive. Subtract before comparing so neither
+        // address + size nor maximumAddress + 1 can overflow.
+        return (nuint)(size - 1) <= maximumAddress - address;
+    }
+
     public RegionEnumerationResult QueryReadableRegions(CancellationToken ct = default)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(WindowsMemoryReader));
         var regions = new List<MemoryRegion>();
-        NativeMethods.GetNativeSystemInfo(out var si);
-        nint curr = si.lpMinimumApplicationAddress;
-        nint max = si.lpMaximumApplicationAddress;
+        nint curr = (nint)_minAddress;
+        nint max = (nint)_maxAddress;
         RegionEnumerationFailure failCause = RegionEnumerationFailure.None;
         int failErr = 0;
 

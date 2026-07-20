@@ -6,7 +6,7 @@
 
 ## 1. Memory Region
 
-The protocol occupies a contiguous memory region of **16400 bytes** allocated by the Lua addon as a backing string (`string.rep("\0", 16400)`). The external Reader locates this region by scanning process memory for the sentinel magic.
+The protocol defines a contiguous **16400-byte** memory image. The external Reader locates the image by scanning process memory for the sentinel magic. A conforming live publisher must keep this image at a stable readable virtual address while updating it according to the writer rules in section 6. The current Lua skeleton represents the image with an immutable string and does not yet satisfy that backing-storage invariant.
 
 ```
 Offset   Size    Field
@@ -29,17 +29,17 @@ The sentinel at offset 0 serves as the scan target for the external Reader. Its 
 | 8 | 4 | uint32 LE | 16400 (total region size for bounds checking) |
 | 12 | 4 | uint32 LE | 8192 (single buffer slot size) |
 
-The writer never modifies the sentinel after initial allocation. The sentinel's fixed position and magic provide a stable reference point for the Reader to locate the double buffer.
+The writer never changes the sentinel bytes after initialization. In a conforming live publisher, the sentinel's fixed position and magic provide a stable reference point for the Reader. Retaining the bytes in a newly allocated immutable string is not sufficient because the virtual address may change.
 
 ## 3. Buffer Slot Layout
 
-Each 8192-byte buffer slot is independent. The writer writes to exactly one slot per frame, strictly alternating between A (offset 16) and B (offset 8208). After writing payload, the writer MUST update the CRC field last so that a torn read yields a CRC mismatch.
+Each 8192-byte buffer slot is independent. The writer writes to exactly one slot per frame, strictly alternating between A (offset 16) and B (offset 8208). The region must use stable mutable backing storage. After writing the payload in place, the writer MUST update the CRC field last so that a torn read yields a CRC mismatch.
 
 ```
 Offset   Size  Field
 ------   ----  -----
 0        4     Sequence (uint32 LE) — monotonic per session, starts at 1
-4        4     ProducerFrameMs (uint32 LE) — Inspect.Time.Frame() value
+4        4     ProducerFrameMs (uint32 LE) — Inspect.Time.Frame() converted to milliseconds
 8        4     SectionsMask (uint32 LE) — bitmask of populated sections
 12       4     HeartbeatIntervalMs (uint32 LE) — emitter's configured heartbeat interval
 16       4     PayloadLength (uint32 LE) — bytes of section data following header
@@ -74,7 +74,7 @@ Each bit corresponds to a section type present in the payload:
 | 5 | 0x00000020 | Target auras list |
 | 6–31 | — | Reserved, MUST be 0 |
 
-Sections appear in the payload in ascending mask order (ProviderInfo first, then Player, Target, Abilities, PlayerAuras, TargetAuras). The ascending order follows bits 0 through 5. The SectionsMask describes which are present; a section MAY be omitted even if its mask bit is 0 and the reader MUST NOT assume presence from mask alone.
+Sections appear in the payload in ascending mask order (ProviderInfo first, then Player, Target, Abilities, PlayerAuras, TargetAuras). The ascending order follows bits 0 through 5. A section is present if and only if its mask bit is set. The Reader rejects duplicate sections, out-of-order sections, and any mismatch between the parsed section set and `SectionsMask`.
 
 ## 4. Section Encoding
 
@@ -107,8 +107,8 @@ Maximum client version string length: 128 bytes.
 
 | Offset | Size | Type | Field | Null sentinel |
 |--------|------|------|-------|---------------|
-| 4 | 2 | uint16 LE | IdLength | — |
-| 6 | N | ASCII | Id (unit specifier or numeric ID string) | 0 length |
+| 0 | 2 | uint16 LE | IdLength | — |
+| 2 | N | ASCII | Id (unit specifier or numeric ID string) | 0 length |
 | — | 2 | uint16 LE | NameLength | — |
 | — | N | UTF-8 | Name | 0 length |
 | — | 4 | int32 LE | Level | −1 |
@@ -145,8 +145,8 @@ Maximum string lengths: Id 64, Name 32, Calling 16, ResourceKind 16, CastAbility
 
 | Offset | Size | Type | Field |
 |--------|------|------|-------|
-| 4 | 2 | uint16 LE | Count (number of ability records, 0–128) |
-| 6 | N×46 | — | Ability records (each 46 bytes fixed, see below) |
+| 0 | 2 | uint16 LE | Count (number of ability records, 0–128) |
+| 2 | N×46 | — | Ability records (each 46 bytes fixed, see below) |
 
 **Ability Record** (46 bytes, fixed-length for scanning efficiency):
 
@@ -165,8 +165,8 @@ Fixed-length records allow the parser to compute offsets without per-record leng
 
 | Offset | Size | Type | Field |
 |--------|------|------|-------|
-| 4 | 2 | uint16 LE | Count (number of aura records, 0–64) |
-| 6 | N×70 | — | Aura records (each 70 bytes fixed) |
+| 0 | 2 | uint16 LE | Count (number of aura records, 0–64) |
+| 2 | N×70 | — | Aura records (each 70 bytes fixed) |
 
 **Aura Record** (70 bytes):
 
@@ -177,9 +177,9 @@ Fixed-length records allow the parser to compute offsets without per-record leng
 | 34 | 32 | UTF-8 | Name (null-padded) | — |
 | 66 | 1 | uint8 | Stacks (0 if unknown) | — |
 | 67 | 1 | uint8 | Flags (bit0=isDebuff, bit1=isCurse, bit2=isDisease, bit3=isPoison) | — |
-| 68 | 2 | int16 LE | RemainingMsLow (lower 16 bits of remaining ms; −1 if unknown) | −1 |
+| 68 | 2 | int16 LE | RemainingMs (0–32767; −1 if unknown) | −1 |
 
-`RemainingMsLow` stores the lower 16 bits of the aura remaining time in milliseconds. Total remaining = `RemainingMsLow` (if ≥ 0) else unknown.
+`RemainingMs` is a signed 16-bit millisecond value. Values from 0 through 32767 are representable; `-1` means unknown. Longer durations require a future protocol version rather than truncation or wrapping.
 
 ## 5. CRC32
 
@@ -207,13 +207,13 @@ The reader MUST:
 4. Compare to saved value
 5. Restore the CRC field (or discard the copy)
 
-CRC mismatch means the buffer is corrupted or torn (writer was mid-write). The reader MUST NOT consume a frame with a CRC mismatch.
+CRC mismatch means the buffer is corrupted or may have been read while a conforming in-place writer was updating it. The Reader MUST NOT consume a frame with a CRC mismatch.
 
 ## 6. Double-Buffer Protocol
 
 ### 6.1 Writer Rules (Lua Emitter)
 
-1. Initialize both buffers with all zeros.
+1. Allocate one stable, mutable, contiguous 16400-byte region and initialize both buffers with zeros.
 2. On the first frame, set Sequence=1, write into Buffer A.
 3. On each subsequent frame:
    a. Increment Sequence by 1.
@@ -223,6 +223,8 @@ CRC mismatch means the buffer is corrupted or torn (writer was mid-write). The r
 4. Heartbeat frames (no game state change, conditions unchanged) MUST have IsHeartbeat flag set and only include the ProviderInfo section. They MUST still increment Sequence.
 5. Game-observed timestamps (ProducerFrameMs) MUST come from `Inspect.Time.Frame()`.
 6. The SessionId MUST persist for the lifetime of the addon load and change on reload.
+7. If a complete payload would exceed 8164 bytes, the Writer MUST leave both slots and Sequence unchanged. It MUST NOT publish a heartbeat in place of dropped game state; the unchanged frame must age stale at the Reader.
+8. A list section is complete only when enumeration and every detail lookup succeed without hitting the record cap. Omit incomplete list sections so consumers treat them as unknown rather than known-empty or complete.
 
 ### 6.2 Reader Rules (C# Parser)
 
@@ -230,20 +232,31 @@ CRC mismatch means the buffer is corrupted or torn (writer was mid-write). The r
 2. Validate TotalSize and BufferSlotSize.
 3. On each read cycle:
    a. Copy both Buffer A and Buffer B into local memory.
-   b. Validate CRC32 for each buffer independently.
-   c. Select the buffer with:
-      - Valid CRC
-      - Higher Sequence number
-   d. If both have valid CRC, use the higher sequence.
-   e. If only one has valid CRC, use it (writer was mid-write on the other).
-   f. If neither has valid CRC, the transport is faulted.
+   b. Validate CRC32 and parse each buffer independently.
+   c. If only one frame is valid, select it.
+   d. For frames in the same session, select by wrap-aware uint32 serial-number ordering. If sequence values are equal, every other header identity field must also match; otherwise selection is ambiguous.
+   e. For frames from different sessions, select by wrap-aware `ProducerFrameMs` ordering.
+   f. A difference of exactly `0x80000000`, a cross-session producer-time tie, conflicting equal-sequence headers, or the absence of a unique newest candidate is ambiguous and fails closed.
+   g. If neither frame is valid, the transport is faulted.
 4. Validate ProtocolVersion == 5; reject otherwise.
 5. Validate Reserved fields are zero; reject otherwise.
-6. Track Sequence continuity: gaps indicate missed frames; restart resets sequence to 1 with new SessionId.
+6. Track Sequence continuity: gaps indicate missed frames; a new SessionId establishes a new baseline.
 
 ### 6.3 Torn-Read Semantics
 
-A torn read occurs when the Reader copies a buffer while the Writer is actively writing it. CRC32 validation reliably detects torn reads because the CRC field is written last. The Reader then falls back to the other buffer (which the writer is not touching). With two buffers, every consistent read is guaranteed to find at least one stable slot.
+A torn read occurs when the Reader copies a slot while a conforming Writer is actively updating that same stable allocation. CRC32 validation detects the inconsistent slot because the CRC field is written last. The Reader then falls back to the other slot, which the Writer is not touching. This guarantee depends on one stable mutable allocation and in-place ordered writes; immutable whole-value replacement does not provide it.
+
+### 6.4 Current Lua Skeleton Limitation
+
+`BotDsBridge/main.lua` currently rebuilds immutable Lua strings during every field write. Consequently:
+
+- the 16400-byte image may move to a different virtual address;
+- intermediate and stale copies may coexist until garbage collection;
+- CRC-last is construction order, not an observable in-place publication barrier;
+- alternating logical slots does not guarantee that the Reader sees one stable physical slot; and
+- repeated full-string copies create excessive temporary allocation volume.
+
+The addon is therefore a provider-envelope prototype only. Live publication requires either a current-client facility that exposes stable mutable storage or a transport redesign. Reader relocation scans reduce the effect of occasional movement but cannot establish this invariant for a region that may move on every write.
 
 ## 7. Sequence And Session Continuity
 
@@ -255,12 +268,13 @@ A session begins when the addon is loaded (new SessionId UUID). Sequence starts 
 
 | Condition | Health impact |
 |-----------|--------------|
-| New SessionId with Sequence=1 | Normal: session restart (Healthy after first valid frame) |
+| New SessionId | Normal: establish a new session baseline |
 | Sequence increments by exactly 1 | Normal: continuous (Healthy) |
 | Sequence increments by >1 | Degraded: gap detected |
-| Sequence does not increment for > HeartbeatIntervalMs × 3 | Stale: writer may be paused |
+| Sequence does not increment beyond the accepted maximum age | Stale: writer may be paused |
 | Sequence wraps (unlikely with uint32) | Degraded but still valid |
 | Sequence decrements without new SessionId | Faulted: protocol violation |
+| Sequence difference is exactly `0x80000000` | Faulted: ordering is ambiguous |
 
 ### 7.3 Staleness
 
@@ -276,9 +290,10 @@ The transport-level health maps to `BotDs.Core.ProviderHealth`:
 
 | Transport Condition | ProviderHealth |
 |--------------------|----------------|
-| Sentinel not found or invalid | Disconnected |
-| Sentinel found, no valid CRC on any buffer | Faulted |
-| Valid CRC, but Sequence discontinuity | Degraded |
+| Sentinel not found | Disconnected |
+| Sentinel found but invalid, or no valid CRC on either slot | Faulted |
+| Valid CRC with a forward gap or wrap | Degraded |
+| Valid CRC with a decrement or ambiguous ordering | Faulted |
 | Valid CRC, but frame age > MaxTelemetryAgeMs | Stale |
 | Valid CRC, continuous, fresh | Healthy |
 | Protocol version mismatch | Faulted |
@@ -304,12 +319,12 @@ The transport-level health maps to `BotDs.Core.ProviderHealth`:
 - **Protocol version 5**: this specification.
 - Backward-incompatible changes require a protocol version bump.
 - The Reader MUST reject any ProtocolVersion != 5.
-- The SectionsMask reserved bits allow forward-compatible section additions without a version bump when the Reader can safely skip unknown sections.
+- The Reader rejects reserved SectionsMask bits and unknown section types. Adding section types or mask bits requires a protocol version bump unless a future protocol explicitly defines capability negotiation and safe unknown-section skipping.
 
 ## 11. Cross-Platform Notes
 
 - All multi-byte integers are **little-endian** (LE), matching the x86/x64 platform.
 - Strings are length-prefixed, NOT null-terminated.
 - Fixed-length string fields use space-padding (ASCII 0x20) for remaining bytes.
-- `Inspect.Time.Frame()` returns time in milliseconds since client start (monotonic, not wall clock).
-- `ProducerFrameMs` is the emitter's monotonic frame-time value (e.g. Inspect.Time.Frame() or equivalent). It is NOT epoch time. Reader freshness is based on how long the selected sequence remains unchanged.
+- `Inspect.Time.Frame()` returns monotonic frame time in seconds; the Lua emitter multiplies it by 1000 and floors it for the uint32 millisecond field.
+- `ProducerFrameMs` is monotonic time since client start, not epoch time. Reader freshness is based on how long the selected sequence remains unchanged.

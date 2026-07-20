@@ -81,10 +81,12 @@ public sealed class CombatProfileLoaderTests
     [Fact]
     public void Validate_DisabledBindingAllowsEmptyAbilityId()
     {
+        // A disabled profile may keep disabled empty placeholders.
         var profile = new CombatProfile
         {
             Id = "test-disabled",
             ProfileVersion = 1,
+            Enabled = false,
             Character = new CharacterRequirements { Calling = "Warrior", MinimumLevel = 1, MaximumLevel = 75 },
             Abilities = new Dictionary<string, AbilityBinding>
             {
@@ -95,7 +97,6 @@ public sealed class CombatProfileLoaderTests
                 new CombatRule { Id = "r1", Ability = "disabled-ability", Enabled = false, When = new RuleConditions() },
             ]
         };
-        // NOTE: The loader validates enabled bindings; disabled bindings skip empty id/key checks.
         ProfileValidationResult result = CombatProfileLoader.Validate(profile);
         Assert.True(result.IsValid, string.Join("; ", result.Errors));
     }
@@ -219,6 +220,231 @@ public sealed class CombatProfileLoaderTests
         }
     }
 
+    // ── Build validation ───────────────────────────────────────
+
+    [Fact]
+    public void Validate_EnabledProfile_NonblankBuild_ReturnsError()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Character = new CharacterRequirements { Calling = "Warrior", MinimumLevel = 1, MaximumLevel = 75, Build = "Paragon" },
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("build", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_EnabledProfile_WhitespaceBuild_ReturnsError()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Character = new CharacterRequirements { Calling = "Warrior", MinimumLevel = 1, MaximumLevel = 75, Build = "   " },
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("whitespace", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_DisabledProfile_NonblankBuild_IsValid()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Enabled = false,
+            Character = new CharacterRequirements { Calling = "Warrior", MinimumLevel = 1, MaximumLevel = 75, Build = "Paragon" },
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
+    public void Validate_DisabledProfile_WhitespaceBuild_ReturnsError()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Enabled = false,
+            Character = new CharacterRequirements { Calling = "Warrior", MinimumLevel = 1, MaximumLevel = 75, Build = "\t" },
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("whitespace", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_DisabledProfile_NullBuild_IsValid()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Enabled = false,
+            Character = new CharacterRequirements { Calling = "Warrior", MinimumLevel = 1, MaximumLevel = 75, Build = null },
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
+    public void Validate_DisabledProfile_EmptyBuild_ReturnsError()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Enabled = false,
+            Character = new CharacterRequirements { Calling = "Warrior", MinimumLevel = 1, MaximumLevel = 75, Build = "" },
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("whitespace", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ── Enabled-profile structural requirements ────────────────
+
+    [Fact]
+    public void Validate_EnabledProfile_NoEnabledBindings_ReturnsError()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "ability_attack", Key = "1", Enabled = false },
+            },
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("enabled ability binding", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_EnabledProfile_NoEnabledRules_ReturnsError()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Rules =
+            [
+                new CombatRule { Id = "r1", Ability = "attack", Enabled = false, When = new RuleConditions() },
+            ],
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("enabled rule", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_EnabledProfile_RuleReferencesDisabledBinding_ReturnsError()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "ability_attack", Key = "1", Enabled = false },
+                ["heal"] = new() { AbilityId = "ability_heal", Key = "2", Enabled = true },
+            },
+            Rules =
+            [
+                new CombatRule { Id = "r1", Ability = "attack", Enabled = true, When = new RuleConditions() },
+                new CombatRule { Id = "r2", Ability = "heal", Enabled = true, When = new RuleConditions() },
+            ],
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("disabled ability binding", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_EnabledProfile_AllBindingsOutOfLevelRange_ReturnsError()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Character = new CharacterRequirements { Calling = "Warrior", MinimumLevel = 10, MaximumLevel = 20 },
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "ability_attack", Key = "1", Enabled = true, MinimumLevel = 30, MaximumLevel = 40 },
+            },
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("overlaps", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_EnabledProfile_OneBindingInLevelRange_IsValid()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Character = new CharacterRequirements { Calling = "Warrior", MinimumLevel = 10, MaximumLevel = 30 },
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["low"] = new() { AbilityId = "low", Key = "1", Enabled = true, MinimumLevel = 1, MaximumLevel = 5 },
+                ["mid"] = new() { AbilityId = "mid", Key = "2", Enabled = true, MinimumLevel = 15, MaximumLevel = 25 },
+            },
+            Rules =
+            [
+                new CombatRule { Id = "r1", Ability = "low", Enabled = true, When = new RuleConditions() },
+                new CombatRule { Id = "r2", Ability = "mid", Enabled = true, When = new RuleConditions() },
+            ],
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
+    public void Validate_DisabledProfile_EmptyPlaceholders_IsValid()
+    {
+        var profile = new CombatProfile
+        {
+            Enabled = false,
+            Id = "disabled-draft",
+            ProfileVersion = 1,
+            Character = new CharacterRequirements { Calling = "Warrior" },
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["placeholder"] = new() { AbilityId = "", Key = "", Enabled = false },
+            },
+            Rules =
+            [
+                new CombatRule { Id = "placeholder", Ability = "placeholder", Enabled = false, When = new RuleConditions() },
+            ],
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.True(result.IsValid, string.Join("; ", result.Errors));
+    }
+
+    [Fact]
+    public void Validate_EnabledProfile_NullBindingAndRule_ReturnsErrorsWithoutThrowing()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["missing"] = null!,
+            },
+            Rules = [null!],
+        };
+
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("binding is null", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, error => error.Contains("rule entry is null", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validate_EnabledProfile_NullRuleFields_ReturnsErrorsWithoutThrowing()
+    {
+        var profile = CreateValidProfile() with
+        {
+            Rules =
+            [
+                new CombatRule { Id = null!, Ability = null!, When = new RuleConditions() },
+            ],
+        };
+
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("rule id", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, error => error.Contains("ability is required", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static CombatProfile CreateValidProfile() => new()
     {
         Id = "test-profile",
@@ -228,7 +454,6 @@ public sealed class CombatProfileLoaderTests
             Calling = "Warrior",
             MinimumLevel = 1,
             MaximumLevel = 75,
-            Build = "TestBuild",
         },
         Abilities = new Dictionary<string, AbilityBinding>
         {
@@ -364,10 +589,13 @@ public sealed class CombatEvaluatorTests
         TelemetryFrame frame = CreateHealthyFrame() with
         {
             Abilities = new Dictionary<string, AbilityState>(),
+            IsAbilitiesKnown = true,
         };
+        // The enabled binding has Required=true by default, so the required
+        // binding reconciliation gate fires before rule evaluation.
         EvaluationResult result = evaluator.Evaluate(CreateCompatibleProfile(), frame);
-        Assert.NotEmpty(result.Rejections);
-        Assert.Equal(ControllerState.Evaluating, result.State);
+        Assert.Equal(StopReason.ProfileMismatch, result.StopReason);
+        Assert.Contains("attack-ability-id", result.Message!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -401,8 +629,8 @@ public sealed class CombatEvaluatorTests
         TelemetryFrame frame = CreateHealthyFrame();
         EvaluationResult result = evaluator.Evaluate(profile, frame);
         Assert.False(result.HasAction);
-        Assert.Single(result.Rejections);
-        Assert.Contains(result.Rejections[0].Reasons, r => r.Contains("disabled", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(ControllerState.Stopped, result.State);
+        Assert.Equal(StopReason.IntegrityFailure, result.StopReason);
     }
 
     [Fact]
@@ -424,8 +652,10 @@ public sealed class CombatEvaluatorTests
         };
         TelemetryFrame frame = CreateHealthyFrame();
         EvaluationResult result = evaluator.Evaluate(profile, frame);
+        // Enabled profile with no reachable rule/binding pair → IntegrityFailure.
         Assert.False(result.HasAction);
-        Assert.Single(result.Rejections);
+        Assert.Equal(ControllerState.Stopped, result.State);
+        Assert.Equal(StopReason.IntegrityFailure, result.StopReason);
     }
 
     [Fact]
@@ -462,6 +692,218 @@ public sealed class CombatEvaluatorTests
 
         Assert.Equal(ControllerState.Stopped, result.State);
         Assert.Equal(StopReason.ProfileMismatch, result.StopReason);
+    }
+
+    // ── Required binding reconciliation ────────────────────────
+
+    [Fact]
+    public void Evaluate_RequiredBinding_AbilitiesUnknown_StopsProviderUnavailable()
+    {
+        var profile = CreateCompatibleProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "attack-id", Key = "1", Enabled = true, Required = true },
+            },
+        };
+        TelemetryFrame frame = CreateHealthyFrame() with { IsAbilitiesKnown = false };
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+        Assert.Equal(StopReason.ProviderUnavailable, result.StopReason);
+        Assert.Contains("unknown", result.Message!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Evaluate_RequiredBinding_AbilitiesKnownButUnavailable_StopsProfileMismatch()
+    {
+        var profile = CreateCompatibleProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "missing-id", Key = "1", Enabled = true, Required = true },
+            },
+        };
+        TelemetryFrame frame = CreateHealthyFrame();
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+        Assert.Equal(StopReason.ProfileMismatch, result.StopReason);
+        Assert.Contains("missing-id", result.Message!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Evaluate_RequiredBinding_AbilitiesKnownAndAvailable_Passes()
+    {
+        var profile = CreateCompatibleProfile();
+        TelemetryFrame frame = CreateHealthyFrame();
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+        Assert.NotEqual(StopReason.ProviderUnavailable, result.StopReason);
+        Assert.NotEqual(StopReason.ProfileMismatch, result.StopReason);
+    }
+
+    [Fact]
+    public void Evaluate_OptionalBinding_Missing_DoesNotStop()
+    {
+        var profile = CreateCompatibleProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "attack-id", Key = "1", Enabled = true, Required = false },
+            },
+        };
+        TelemetryFrame frame = CreateHealthyFrame();
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+        // Optional missing ability should not stop; it becomes a rule rejection.
+        Assert.NotEqual(StopReason.ProviderUnavailable, result.StopReason);
+        Assert.NotEqual(StopReason.ProfileMismatch, result.StopReason);
+    }
+
+    [Fact]
+    public void Evaluate_OptionalBinding_AbilitiesUnknown_RejectsAsUnknownWithoutStopping()
+    {
+        var profile = CreateCompatibleProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "attack-id", Key = "1", Enabled = true, Required = false },
+            },
+        };
+        TelemetryFrame frame = CreateHealthyFrame() with
+        {
+            Abilities = new Dictionary<string, AbilityState>(),
+            IsAbilitiesKnown = false,
+        };
+
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+
+        Assert.Equal(ControllerState.Evaluating, result.State);
+        Assert.Equal(StopReason.None, result.StopReason);
+        Assert.Contains(result.Rejections.SelectMany(rejection => rejection.Reasons),
+            reason => reason.Contains("inventory is unknown", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Evaluate_OnlyBindingAboveCurrentLevel_StopsIntegrityFailure()
+    {
+        var profile = CreateCompatibleProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "high-level-id", Key = "1", Enabled = true, Required = true, MinimumLevel = 60 },
+            },
+        };
+        // The required-binding gate ignores this level-60 binding, but no rule
+        // is executable for the level-45 player.
+        TelemetryFrame frame = CreateHealthyFrame();
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+        Assert.Equal(StopReason.IntegrityFailure, result.StopReason);
+        Assert.NotEqual(StopReason.ProviderUnavailable, result.StopReason);
+        Assert.NotEqual(StopReason.ProfileMismatch, result.StopReason);
+    }
+
+    [Fact]
+    public void Evaluate_RequiredBinding_ExactlyMinLevel_InRange()
+    {
+        var profile = CreateCompatibleProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "min-level-id", Key = "1", Enabled = true, Required = true, MinimumLevel = 45 },
+            },
+        };
+        // Player is level 45, binding requires level 45+ → binding is in range, but ability not in frame
+        TelemetryFrame frame = CreateHealthyFrame() with
+        {
+            Abilities = new Dictionary<string, AbilityState>(),
+        };
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+        Assert.Equal(StopReason.ProfileMismatch, result.StopReason);
+        Assert.Contains("min-level-id", result.Message!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Evaluate_RequiredBinding_ExactlyMaxLevel_InRange()
+    {
+        var profile = CreateCompatibleProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "max-level-id", Key = "1", Enabled = true, Required = true, MaximumLevel = 45 },
+            },
+        };
+        // Player is level 45, binding max is 45 → in range, ability missing
+        TelemetryFrame frame = CreateHealthyFrame() with
+        {
+            Abilities = new Dictionary<string, AbilityState>(),
+        };
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+        Assert.Equal(StopReason.ProfileMismatch, result.StopReason);
+    }
+
+    [Fact]
+    public void Evaluate_OnlyBindingBelowCurrentLevel_StopsIntegrityFailure()
+    {
+        var profile = CreateCompatibleProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "below-id", Key = "1", Enabled = true, Required = true, MaximumLevel = 44 },
+            },
+        };
+        // The required-binding gate ignores this level-44 binding, but no rule
+        // is executable for the level-45 player.
+        TelemetryFrame frame = CreateHealthyFrame();
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+        Assert.Equal(StopReason.IntegrityFailure, result.StopReason);
+        Assert.NotEqual(StopReason.ProviderUnavailable, result.StopReason);
+        Assert.NotEqual(StopReason.ProfileMismatch, result.StopReason);
+    }
+
+    // ── Build defense-in-depth ─────────────────────────────────
+
+    [Fact]
+    public void Evaluate_EnabledProfile_NonblankBuild_DefenseInDepth_StopsProfileMismatch()
+    {
+        // Bypass validation by creating profile in-memory with nonblank Build.
+        var profile = CreateCompatibleProfile() with
+        {
+            Character = new CharacterRequirements
+            {
+                Calling = "Warrior",
+                MinimumLevel = 1,
+                MaximumLevel = 75,
+                Build = "SomeBuild",
+            },
+        };
+        TelemetryFrame frame = CreateHealthyFrame();
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+        Assert.Equal(StopReason.ProfileMismatch, result.StopReason);
+        Assert.Contains("build", result.Message!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── IntegrityFailure for all-disabled ──────────────────────
+
+    [Fact]
+    public void Evaluate_EnabledProfile_AllDisabledBindings_IntegrityFailure()
+    {
+        var profile = CreateCompatibleProfile() with
+        {
+            Abilities = new Dictionary<string, AbilityBinding>
+            {
+                ["attack"] = new() { AbilityId = "attack-id", Key = "1", Enabled = false },
+            },
+            Rules =
+            [
+                new CombatRule
+                {
+                    Id = "test-attack",
+                    Ability = "attack",
+                    Enabled = true,
+                    When = new RuleConditions { TargetHostile = true },
+                },
+            ],
+        };
+        TelemetryFrame frame = CreateHealthyFrame();
+        EvaluationResult result = new CombatEvaluator(MaxAge).Evaluate(profile, frame);
+        Assert.Equal(StopReason.IntegrityFailure, result.StopReason);
+        Assert.Contains("enabled", result.Message!, StringComparison.OrdinalIgnoreCase);
     }
 
     private static CombatProfile CreateCompatibleProfile() => new()
@@ -521,7 +963,8 @@ public sealed class CombatEvaluatorTests
                     IsPassive: null),
             },
             PlayerAuras: [],
-            TargetAuras: []);
+            TargetAuras: [],
+            IsAbilitiesKnown: true);
     }
 
     private static UnitState CreatePlayerState() => new(

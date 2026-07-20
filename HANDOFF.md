@@ -1,6 +1,6 @@
 # Implementation Handoff
 
-Last updated: 2026-07-19
+Last updated: 2026-07-20
 
 ## Resume Instruction
 
@@ -71,7 +71,7 @@ The detailed reviewed plan is preserved in the conversation history. The context
 - Added project references among Core, Reader, App, and Tests.
 - Added `Serilog.AspNetCore` `10.0.0`; its package graph includes console, file, compact JSON, configuration, and hosting support.
 
-### Partial Core Implementation
+### Core Implementation
 
 `src/BotDs.Core` currently contains:
 
@@ -100,7 +100,7 @@ dotnet test BotDs.sln --no-build
 dotnet format BotDs.sln --verify-no-changes --no-restore
 ```
 
-Result: zero warnings, zero errors, clean formatting, and 192 passing tests.
+Result: zero warnings, zero errors, clean formatting, and 378 passing tests.
 
 ## Configured OpenCode Agents
 
@@ -145,9 +145,24 @@ The merged configuration and agent definitions passed `opencode debug config` an
 - Dashboard API locality uses the remote loopback address, and profile reload requires control authorization.
 - Dashboard arming confirms only current technical readiness; it does not request terms or account-risk acknowledgement.
 - Profile reload is atomic, rejects duplicate IDs, and clears stale profiles when the configured directory disappears.
-- The solution currently has 316 passing Core, protocol, scanner/native, controller, security, profile, and telemetry lifecycle tests.
+- Profile reload now preserves the previous cache and active profile on missing directory, invalid JSON, or semantic validation failure — reload is fully atomic.
+- Profile validation details are bounded to 120 characters, and load failures omit exception text and absolute paths.
+- Profile validation rejects non-blank `character.build` on enabled profiles and enforces structural requirements: at least one enabled binding, at least one enabled rule, no rules referencing disabled bindings, and level-range overlap between enabled rules and the profile's level range.
+- Evaluator required-binding reconciliation: when `IsAbilitiesKnown` is false and the profile has in-range required bindings, evaluation stops with `ProviderUnavailable`. When a required ability is missing from telemetry, evaluation stops with `ProfileMismatch`. Optional missing abilities are handled as rule rejections without stopping. Level-range awareness ensures out-of-range required bindings are inert.
+- Telemetry frame now carries `IsAbilitiesKnown`, populated by the V5 mapper: an omitted abilities section mask yields `false`, a present (even empty) abilities section yields `true`.
+- Scanner stale backoff suppresses repeated full rescans within a 5-second window after a stale result, preventing busy loops when the region is permanently stale. Backoff resets on reattach.
+- Scanner deduplication detects ambiguous candidates when same-session same-sequence frames have different flags, protocol versions, heartbeat intervals, or payload lengths.
+- `ReadExact` enforces address bounds: overflow, max-application-address, and negative-address cases throw `ReaderFailureCode.ReadFailure`.
+- `CandidateLimitHits` metric incremented only for limit-exceeded failures (not for `QueryFailure`).
+- Controller adds `ClearStop` to release the explicit `Stopped` latch, returning to `Disarmed`.
+- Dashboard UI adds a two-checkbox arm confirmation dialog (target + system readiness), a Clear Stop button, and a token clear button.
+- `WindowsMemoryReader.IsRangeWithinApplicationBounds` uses inclusive maximum (native-maximum-sized reads validate correctly).
+- Native error mapping (`MapWin32Error`) wired for `VerifyName` failures, with test coverage.
+- `schemas/combat-profile.schema.json` updated with `character.build` condition, `required` per-binding field, and extended conditions.
+- `addons/BotDsBridge/PROTOCOL.md` contains the normative wire-format specification with byte offsets, section encoding, CRC rules, double-buffer discipline, and health mapping.
+- The solution currently has 378 passing Core, protocol, scanner/native, controller, security, profile, and telemetry lifecycle tests.
 
-Verification completed on 2026-07-19:
+Verification completed on 2026-07-20:
 
 ```text
 dotnet build BotDs.sln --no-restore
@@ -177,12 +192,10 @@ Do not let concurrent agents edit the same project file. Let the primary agent p
 
 1. Resolve the live addon backing-storage invariant: the current immutable Lua string is rebuilt repeatedly, so address stability and stale-copy behavior require runtime validation or a transport redesign before enabling live publication.
 2. Populate live addon unit, ability, cast, and aura sections after current-client conformance validation.
-3. Add a hosted Reader service that publishes normalized snapshots and preserves the last full snapshot across heartbeat-only frames without carrying state across inspection failure, session change, or transport faults.
+3. Add a hosted Reader service that publishes normalized snapshots to the `SnapshotPublisher` and preserves the last full snapshot across heartbeat-only frames without carrying state across inspection failure, session change, or transport faults. The `V5ScannerService`, `V5HealthMapper`, and `SnapshotPublisher` are ready; the wiring and `IHostedService` implementation are not.
 4. Implement action acknowledgement tracking, rate limits, foreground/focus checks, and emergency-stop input hooks before any keyboard actuator is added.
-5. Add a minimal local action history and useful crash diagnostics without separate production-style audit pipelines or long retention.
-6. Add endpoint-level dashboard integration tests and recorded replay tests; scanner/native fixtures, malformed protocol, middleware security, profile reload, and controller lifecycle coverage now exist.
-7. Add Reader attribution and product/setup documentation, including dashboard token and scanner selector configuration.
-8. Continue findings-only review after each implementation slice; the scanner review was completed and its actionable findings were resolved.
+5. Add endpoint-level dashboard integration tests and recorded replay tests; scanner/native fixtures, malformed protocol, middleware security, profile reload, controller lifecycle, and telemetry-safety coverage now exist.
+6. Continue findings-only review after each implementation slice; scanner, evaluator, and profile-validation reviews completed.
 
 ## Inputs Still Needed
 
@@ -199,10 +212,9 @@ Do not invent these values. The initial fixture should remain disabled until the
 ## Useful Commands
 
 ```text
-opencode --version
-opencode debug config
-git status --short --branch
 dotnet restore BotDs.sln
 dotnet build BotDs.sln --no-restore
-dotnet test BotDs.sln --no-build
+dotnet test BotDs.sln --no-restore
+dotnet format BotDs.sln --verify-no-changes --no-restore
+luac -p addons/BotDsBridge/BotDsBridge/main.lua
 ```

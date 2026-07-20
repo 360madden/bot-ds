@@ -59,7 +59,14 @@ public sealed class V5ScannerService : IDisposable
     private int _attachPid;
     private long _attachGen;
     private ScannerMetrics _metrics = ScannerMetrics.Empty;
-    private bool _disposed;
+    private volatile bool _disposed;
+
+    // Stale backoff: after a relocation scan still yields stale, suppress rescans
+    // for a bounded interval to prevent a permanent-stale candidate from triggering
+    // a full scan on every read cycle.
+    private bool _staleBackoffActive;
+    private long _lastStaleTimestamp;
+    private static readonly TimeSpan StaleBackoffInterval = TimeSpan.FromSeconds(5);
 
     public V5ScannerService(ProcessSelector selector, TimeSpan localMaxAge,
         SentinelScannerOptions? scannerOptions = null, IMemoryReaderFactory? readerFactory = null,
@@ -107,6 +114,7 @@ public sealed class V5ScannerService : IDisposable
 
                 if (cand is null)
                 {
+                    d.CacheMiss = 1;
                     var sr = V5SentinelScanner.Scan(_reader, _scannerOpts, ct);
                     d.FullScan = 1; d.Regions = sr.TotalRegions; d.Eligible = sr.TotalRegions;
                     d.Bytes = sr.BytesScanned; d.RawMatch = sr.RawMagicMatches; d.ExactSent = sr.ExactSentinelMatches;
@@ -115,7 +123,8 @@ public sealed class V5ScannerService : IDisposable
                     if (sr.Incomplete)
                     {
                         d.CacheMiss = 1;
-                        d.CandidateLimit = 1;
+                        if ((sr.IncompleteCause & (ScanIncompleteCause.RawMatchLimitExceeded | ScanIncompleteCause.CandidateLimitExceeded)) != 0)
+                            d.CandidateLimit = 1;
                         // Process-loss race: recheck liveness; if dead, detach + Disconnected.
                         if (!_reader.CheckLiveness())
                         { DetachLocked(); return Fail(d, ProviderHealth.Disconnected, ReaderFailureCode.ProcessExit, "Process exited during scan", t0); }
@@ -138,9 +147,6 @@ public sealed class V5ScannerService : IDisposable
                     cand = best; _cachedAddr = cand.BaseAddress; _hasCached = true;
                 }
 
-                d.CacheHit = usedCache ? 1 : 0;
-                d.CacheMiss = !usedCache && d.FullScan > 0 ? 1 : 0;
-
                 ct.ThrowIfCancellationRequested();
                 StableReadResult srr = DoStableRead(cand);
                 ct.ThrowIfCancellationRequested();
@@ -150,15 +156,41 @@ public sealed class V5ScannerService : IDisposable
 
                 if (srr.TransportHealth == ProviderHealth.Stale)
                 {
-                    _hasCached = false; _cachedAddr = 0; d.CacheMiss = 1;
+                    long staleNow = _timeProvider.GetTimestamp();
+
+                    // This read already relocated the candidate. Keep that stale
+                    // candidate cached and do not run a second full scan in one cycle.
+                    if (d.FullScan > 0)
+                    {
+                        BeginStaleBackoff(staleNow);
+                        return StaleDiagnostic(d, srr, t0);
+                    }
+
+                    TimeSpan elapsed = _staleBackoffActive
+                        ? _timeProvider.GetElapsedTime(_lastStaleTimestamp)
+                        : TimeSpan.MaxValue;
+                    if (_staleBackoffActive
+                        && elapsed >= TimeSpan.Zero
+                        && elapsed < StaleBackoffInterval)
+                    {
+                        d.CacheHit = usedCache ? 1 : 0;
+                        return StaleDiagnostic(d, srr, t0);
+                    }
+
+                    // Retain the validated stale address during relocation. If the
+                    // scan is incomplete, backoff can still revalidate this candidate
+                    // instead of initiating a full scan on every read.
+                    d.CacheMiss = 1;
                     var sr2 = V5SentinelScanner.Scan(_reader, _scannerOpts, ct);
+                    BeginStaleBackoff(_timeProvider.GetTimestamp());
                     d.FullScan++; d.Regions += sr2.TotalRegions; d.Eligible += sr2.TotalRegions;
                     d.Bytes += sr2.BytesScanned; d.RawMatch += sr2.RawMagicMatches; d.ExactSent += sr2.ExactSentinelMatches;
                     d.Candidates += sr2.Candidates.Count; d.ReadFails += sr2.ReadFailures; d.ScanDur += sr2.Duration;
 
                     if (sr2.Incomplete)
                     {
-                        d.CandidateLimit = 1;
+                        if ((sr2.IncompleteCause & (ScanIncompleteCause.RawMatchLimitExceeded | ScanIncompleteCause.CandidateLimitExceeded)) != 0)
+                            d.CandidateLimit = 1;
                         if (!_reader.CheckLiveness())
                         { DetachLocked(); return Fail(d, ProviderHealth.Disconnected, ReaderFailureCode.ProcessExit, "Process exited during relo scan", t0); }
                         return Fail(d, ProviderHealth.Faulted, MapIncomplete(sr2.IncompleteCause), "Relo incomplete", t0);
@@ -183,9 +215,14 @@ public sealed class V5ScannerService : IDisposable
 
                 if (srr.TransportHealth == ProviderHealth.Disconnected)
                 { _hasCached = false; _cachedAddr = 0; d.CacheMiss = 1; return Fail(d, ProviderHealth.Faulted, ReaderFailureCode.InternalError, "Transport disc", t0); }
-                if (srr.TransportHealth is ProviderHealth.Disconnected or ProviderHealth.Faulted)
+                if (srr.TransportHealth == ProviderHealth.Faulted)
                 { _hasCached = false; _cachedAddr = 0; }
 
+                if (srr.TransportHealth != ProviderHealth.Stale)
+                    ResetStaleBackoff();
+
+                if (usedCache && d.FullScan == 0)
+                    d.CacheHit = 1;
                 d.ReadCycleFails = srr.IsUsable ? 0 : 1;
                 _metrics = Apply(d, t0);
                 if (srr.IsUsable) return ScannerReadResult.Healthy(srr, _attachPid, _attachGen, _metrics);
@@ -197,7 +234,6 @@ public sealed class V5ScannerService : IDisposable
                     ProviderHealth.Degraded => ReaderFailureCode.ContinuityDegraded,
                     _ => ReaderFailureCode.InternalError,
                 };
-                d.ReadCycleFails = srr.IsUsable ? 0 : 1;
                 return ScannerReadResult.Diagnostic(srr, fc, _attachPid, _attachGen, _metrics);
             }
             catch (OperationCanceledException) { d.ReadCycleFails = 1; _metrics = Apply(d, t0); throw; }
@@ -226,6 +262,26 @@ public sealed class V5ScannerService : IDisposable
 
     private ScannerReadResult Fail(MetricDeltas d, ProviderHealth h, ReaderFailureCode c, string detail, long t0)
     { d.ReadCycleFails = 1; _metrics = Apply(d, t0); return ScannerReadResult.Failure(h, c, Sanitize(detail), _attachPid, _attachGen, _metrics); }
+
+    private ScannerReadResult StaleDiagnostic(MetricDeltas d, StableReadResult result, long t0)
+    {
+        d.ReadCycleFails = 1;
+        _metrics = Apply(d, t0);
+        return ScannerReadResult.Diagnostic(result, ReaderFailureCode.StaleTelemetry,
+            _attachPid, _attachGen, _metrics);
+    }
+
+    private void BeginStaleBackoff(long timestamp)
+    {
+        _staleBackoffActive = true;
+        _lastStaleTimestamp = timestamp;
+    }
+
+    private void ResetStaleBackoff()
+    {
+        _staleBackoffActive = false;
+        _lastStaleTimestamp = 0;
+    }
 
     private ScannerMetrics Apply(MetricDeltas d, long t0) => _metrics.WithIncrements(
         fullScanDelta: d.FullScan, cacheHitDelta: d.CacheHit, cacheMissDelta: d.CacheMiss,
@@ -303,11 +359,23 @@ public sealed class V5ScannerService : IDisposable
         try { p = Process.GetProcessById(pid); }
         catch (ArgumentException) { throw new ReaderException(ReaderFailureCode.ProcessNotFound, "PID not found"); }
         catch (InvalidOperationException) { throw new ReaderException(ReaderFailureCode.ProcessExit, "Exited"); }
-        catch (Win32Exception we) when (we.NativeErrorCode == 5) { throw new ReaderException(ReaderFailureCode.AccessDenied, $"win32={we.NativeErrorCode}"); }
+        catch (Win32Exception we) { throw new ReaderException(NativeMethods.MapWin32Error(we.NativeErrorCode), $"win32={we.NativeErrorCode}"); }
         try
         {
             if (p is null) throw new ReaderException(ReaderFailureCode.ProcessNotFound, "PID not found");
-            if (!new ProcessSelector { ProcessName = name }.NameMatches(p.ProcessName))
+            string actualName;
+            try { actualName = p.ProcessName; }
+            catch (Win32Exception exception)
+            {
+                throw new ReaderException(
+                    NativeMethods.MapWin32Error(exception.NativeErrorCode),
+                    $"win32={exception.NativeErrorCode}");
+            }
+            catch (InvalidOperationException)
+            {
+                throw new ReaderException(ReaderFailureCode.ProcessExit, "Exited");
+            }
+            if (!new ProcessSelector { ProcessName = name }.NameMatches(actualName))
                 throw new ReaderException(ReaderFailureCode.ProcessNameMismatch, "Name mismatch");
         }
         finally { p?.Dispose(); }
@@ -334,7 +402,9 @@ public sealed class V5ScannerService : IDisposable
     private void DetachLocked()
     {
         var r = _reader; _reader = null; _attachPid = 0; _stableReader?.Reset();
-        _hasCached = false; _cachedAddr = 0; r?.Dispose();
+        _hasCached = false; _cachedAddr = 0;
+        ResetStaleBackoff();
+        r?.Dispose();
     }
 
     public void Dispose()

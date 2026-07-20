@@ -81,6 +81,7 @@ public static class V5HealthMapper
             .Select(ToAuraState)
             .ToList();
 
+        bool abilitiesKnown = frame.Header.HasSection(V5Constants.MaskAbilities);
         bool playerAurasKnown = frame.Header.HasSection(V5Constants.MaskPlayerAuras);
         bool targetAurasKnown = frame.Header.HasSection(V5Constants.MaskTargetAuras);
 
@@ -91,6 +92,7 @@ public static class V5HealthMapper
             Abilities: new ReadOnlyDictionary<string, AbilityState>(abilities),
             PlayerAuras: playerAuras.AsReadOnly(),
             TargetAuras: targetAuras.AsReadOnly(),
+            IsAbilitiesKnown: abilitiesKnown,
             IsPlayerAurasKnown: playerAurasKnown,
             IsTargetAurasKnown: targetAurasKnown);
     }
