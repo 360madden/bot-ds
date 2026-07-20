@@ -1,0 +1,85 @@
+{
+  "$schema": "../schemas/combat-profile.schema.json",
+  "profileVersion": 1,
+  "enabled": true,
+  "id": "synthetic-mage-50",
+  "character": {
+    "calling": "Mage",
+    "minimumLevel": 45,
+    "maximumLevel": 55
+  },
+  "abilities": {
+    "fireball": {
+      "abilityId": "mage-fireball-1",
+      "key": "1",
+      "enabled": true,
+      "required": true,
+      "minimumLevel": 1,
+      "maximumLevel": 60
+    },
+    "frostbolt": {
+      "abilityId": "mage-frostbolt-1",
+      "key": "2",
+      "enabled": true,
+      "required": true,
+      "minimumLevel": 10,
+      "maximumLevel": 60
+    },
+    "arcane-blast": {
+      "abilityId": "mage-arcane-blast-1",
+      "key": "3",
+      "enabled": true,
+      "required": false,
+      "minimumLevel": 55,
+      "maximumLevel": 60
+    }
+  },
+  "rules": [
+    {
+      "id": "frostbolt-opening",
+      "ability": "frostbolt",
+      "enabled": true,
+      "when": {
+        "targetHostile": true,
+        "playerInCombat": false,
+        "abilityUsable": true,
+        "cooldownReady": true
+      },
+      "acknowledgement": "Cooldown"
+    },
+    {
+      "id": "fireball-execute",
+      "ability": "fireball",
+      "enabled": true,
+      "when": {
+        "targetHostile": true,
+        "targetHealthBelowPercent": 25,
+        "cooldownReady": true,
+        "resourceAtLeast": 30
+      },
+      "acknowledgement": "Cooldown"
+    },
+    {
+      "id": "fireball-main",
+      "ability": "fireball",
+      "enabled": true,
+      "when": {
+        "targetHostile": true,
+        "cooldownReady": true,
+        "resourceAtLeast": 20
+      },
+      "acknowledgement": "Cooldown"
+    },
+    {
+      "id": "arcane-blast-late",
+      "ability": "arcane-blast",
+      "enabled": true,
+      "when": {
+        "targetHostile": true,
+        "cooldownReady": true,
+        "resourceAtLeast": 50
+      },
+      "acknowledgement": "Cooldown"
+    }
+  ]
+}
