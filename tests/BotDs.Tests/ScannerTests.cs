@@ -387,6 +387,45 @@ internal static class ScannerTestHelpers
         data.CopyTo(slot, offset + V5Constants.SectionHeaderSize);
         return offset + V5Constants.SectionHeaderSize + data.Length;
     }
+
+    /// <summary>
+    /// Build a complete V5 buffer slot with ProviderInfo + Target section (hostile NPC).
+    /// </summary>
+    public static byte[] BuildSlotWithTarget(
+        uint sequence, Guid sessionId,
+        string targetName, int level,
+        byte unitFlags, byte relation,
+        int healthCur, int healthMax,
+        uint producerFrameMs = 0, uint maxAgeMs = 500)
+    {
+        byte[] slot = new byte[V5Constants.BufferSlotSize];
+        slot[V5Constants.HdrProtocolVersionOffset] = V5Constants.ProtocolVersion;
+        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrSequenceOffset), sequence);
+        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrProducerFrameMsOffset), producerFrameMs);
+
+        byte[] provider = new byte[28];
+        sessionId.TryWriteBytes(provider);
+        BitConverter.TryWriteBytes(provider.AsSpan(16), producerFrameMs);
+        BitConverter.TryWriteBytes(provider.AsSpan(20), maxAgeMs);
+        provider[26] = 1;
+        provider[27] = 0;
+
+        byte[] targetSection = BuildUnitSection(
+            id: "target-npc", name: targetName, level: level, calling: null,
+            flags: unitFlags, relation: relation,
+            healthCur: healthCur, healthMax: healthMax);
+
+        int offset = V5Constants.PayloadOffset;
+        offset = WriteSectionHeader(slot, offset, V5Constants.SectionTypeProviderInfo, provider);
+        offset = WriteSectionHeader(slot, offset, V5Constants.SectionTypeTarget, targetSection);
+
+        uint payloadLength = (uint)(offset - V5Constants.PayloadOffset);
+        uint sectionsMask = V5Constants.MaskProviderInfo | V5Constants.MaskTarget;
+        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrSectionsMaskOffset), sectionsMask);
+        BitConverter.TryWriteBytes(slot.AsSpan(V5Constants.HdrPayloadLengthOffset), payloadLength);
+        V5Crc32.WriteCrc(slot, payloadLength);
+        return slot;
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────

@@ -95,6 +95,106 @@ public sealed class PipelineIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task Pipeline_publishes_target_data()
+    {
+        var session = Guid.NewGuid();
+        byte[] targetSlot = ScannerTestHelpers.BuildSlotWithTarget(
+            sequence: 2, sessionId: session,
+            targetName: "HostileOrc", level: 50,
+            unitFlags: V5Constants.UnitFlagIsAvailable,
+            relation: V5Constants.RelationHostile,
+            healthCur: 8000, healthMax: 12000,
+            producerFrameMs: 0);
+
+        var catalog = new FakeMemoryCatalog();
+        ScannerTestHelpers.PlaceV5Region(catalog, 0x1000000,
+            sessionId: session, seqA: 1, seqB: 2,
+            slotBOverride: targetSlot);
+        var factory = new FakeMemoryReaderFactory();
+        factory.RegisterProcess(42, catalog);
+        var scanner = new V5ScannerService(
+            new ProcessSelector { ProcessId = 42 }, MaxAge, readerFactory: factory);
+        _scanners.Add(scanner);
+
+        var (publisher, _) = await RunLoopAsync(scanner, delayMs: 200);
+
+        TelemetryFrame frame = publisher.Latest;
+        Assert.Equal(ProviderHealth.Healthy, frame.Provider.Health);
+        Assert.Equal(session, Guid.Parse(frame.Provider.SessionId));
+
+        // Target data propagated through the full pipeline
+        Assert.NotNull(frame.Target);
+        Assert.Equal("HostileOrc", frame.Target.Name);
+        Assert.Equal(50, frame.Target.Level);
+        Assert.True(frame.Target.IsHostile);
+        Assert.False(frame.Target.IsPlayer);
+        Assert.Equal(8000, frame.Target.Health.Current);
+        Assert.Equal(12000, frame.Target.Health.Maximum);
+        Assert.Equal("hostile", frame.Target.Relation);
+        Assert.Null(frame.Player);
+    }
+
+    [Fact]
+    public async Task Pipeline_heartbeat_carries_forward_player_state()
+    {
+        var catalog = new FakeMemoryCatalog();
+        var session = Guid.NewGuid();
+
+        // Place player slot as buffer B (seq=2 > seq=1, so B is selected)
+        byte[] playerSlot = ScannerTestHelpers.BuildSlotWithPlayer(
+            sequence: 2, sessionId: session,
+            playerName: "CarryWarrior", level: 45, calling: "Warrior",
+            unitFlags: V5Constants.UnitFlagIsPlayer | V5Constants.UnitFlagIsAvailable,
+            relation: V5Constants.RelationFriendly,
+            healthCur: 5000, healthMax: 5000,
+            producerFrameMs: 0);
+
+        ScannerTestHelpers.PlaceV5Region(catalog, 0x1000000,
+            sessionId: session, seqA: 1, seqB: 2,
+            slotBOverride: playerSlot);
+        var factory = new FakeMemoryReaderFactory();
+        factory.RegisterProcess(42, catalog);
+        var scanner = new V5ScannerService(
+            new ProcessSelector { ProcessId = 42 }, MaxAge, readerFactory: factory);
+        _scanners.Add(scanner);
+
+        var publisher = new SnapshotPublisher();
+        using var cts = new CancellationTokenSource();
+        var config = CreateConfig(readIntervalMs: 10);
+
+        var loop = new TelemetryReaderLoop(scanner, publisher, config,
+            NullLogger<TelemetryReaderLoop>.Instance);
+
+        var loopTask = loop.StartAsync(cts.Token);
+        await Task.Delay(200, CancellationToken.None);
+
+        // Verify player was published in the full frame
+        TelemetryFrame beforeHeartbeat = publisher.Latest;
+        Assert.NotNull(beforeHeartbeat.Player);
+        Assert.Equal("CarryWarrior", beforeHeartbeat.Player.Name);
+
+        // Replace both buffers with heartbeat frames (same session, ProviderInfo-only)
+        byte[] heartbeatSlot = ScannerTestHelpers.BuildSlot(3, session);
+        heartbeatSlot[V5Constants.HdrFlagsOffset] |= V5Constants.FlagIsHeartbeat;
+        uint hbPayloadLen = BitConverter.ToUInt32(heartbeatSlot.AsSpan(V5Constants.HdrPayloadLengthOffset));
+        V5Crc32.WriteCrc(heartbeatSlot.AsSpan(), hbPayloadLen);
+        catalog.ModifyPage(0x1000000, V5Constants.BufferAOffset, heartbeatSlot);
+        catalog.ModifyPage(0x1000000, V5Constants.BufferBOffset, heartbeatSlot);
+
+        await Task.Delay(200, CancellationToken.None);
+        cts.Cancel();
+        try { await loopTask; } catch (OperationCanceledException) { }
+
+        // Heartbeat should carry forward the player state from the last full frame
+        TelemetryFrame frame = publisher.Latest;
+        Assert.NotNull(frame.Player);
+        Assert.Equal("CarryWarrior", frame.Player.Name);
+        Assert.Equal(45, frame.Player.Level);
+        Assert.Equal(5000, frame.Player.Health.Current);
+        Assert.True(frame.Provider.IsHeartbeat);
+    }
+
+    [Fact]
     public async Task Pipeline_fault_produces_disconnected_frame()
     {
         // Scanner with unregistered PID → immediate failure
