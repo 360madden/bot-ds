@@ -35,7 +35,27 @@ try
     builder.Services.AddSingleton<ControllerStateMachine>();
     builder.Services.AddSingleton<EvaluatorLoop>();
     builder.Services.AddSingleton<ArmingReadinessService>();
-    builder.Services.AddSingleton<IKeySink>(new FakeKeySink());
+    // ── Key sink: fake (dry-run) or Windows (live) ──────────
+    bool useWindowsKeySink = builder.Configuration.GetValue<bool>("BotDs:Input:UseWindowsKeySink", false);
+    if (useWindowsKeySink)
+    {
+        int? boundPid = builder.Configuration.GetValue<int?>("BotDs:Input:BoundPid");
+        if (boundPid is > 0)
+        {
+            int chordMs = builder.Configuration.GetValue<int>("BotDs:Input:ChordPressMs", 30);
+            builder.Services.AddSingleton<IKeySink>(new WindowsKeySink(boundPid.Value, chordPressMs: chordMs));
+            Log.Information("WindowsKeySink bound to PID {Pid}, chord press {ChordMs}ms", boundPid, chordMs);
+        }
+        else
+        {
+            Log.Warning("BotDs:Input:UseWindowsKeySink=true but BotDs:Input:BoundPid not set; falling back to FakeKeySink");
+            builder.Services.AddSingleton<IKeySink>(new FakeKeySink());
+        }
+    }
+    else
+    {
+        builder.Services.AddSingleton<IKeySink>(new FakeKeySink());
+    }
     builder.Services.AddSingleton<ActionCoordinator>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<EvaluatorLoop>());
 
