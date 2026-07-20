@@ -427,6 +427,51 @@ public sealed class CombatProfileLoaderTests
         Assert.Contains(result.Errors, error => error.Contains("rule entry is null", StringComparison.OrdinalIgnoreCase));
     }
 
+    // ── Acknowledgement validation ─────────────────────────────
+
+    [Fact]
+    public void Validate_DefinedAcknowledgementKinds_AreAccepted()
+    {
+        foreach (AcknowledgementKind kind in Enum.GetValues<AcknowledgementKind>())
+        {
+            var profile = CreateValidProfile() with
+            {
+                Rules =
+                [
+                    new CombatRule
+                    {
+                        Id = $"r-{kind}", Ability = "attack", Enabled = true,
+                        When = new RuleConditions { TargetHostile = true },
+                        Acknowledgement = kind,
+                    },
+                ],
+            };
+            ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+            Assert.True(result.IsValid, $"Expected {kind} to be valid: {string.Join("; ", result.Errors)}");
+        }
+    }
+
+    [Fact]
+    public void Validate_InvalidAcknowledgementKind_ReturnsError()
+    {
+        var kind = (AcknowledgementKind)99;
+        var profile = CreateValidProfile() with
+        {
+            Rules =
+            [
+                new CombatRule
+                {
+                    Id = "bad-ack", Ability = "attack", Enabled = true,
+                    When = new RuleConditions { TargetHostile = true },
+                    Acknowledgement = kind,
+                },
+            ],
+        };
+        ProfileValidationResult result = CombatProfileLoader.Validate(profile);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("unsupported acknowledgement", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public void Validate_EnabledProfile_NullRuleFields_ReturnsErrorsWithoutThrowing()
     {

@@ -202,6 +202,10 @@ public static class CombatProfileLoader
                     ValidateAuraIds(rule.Id, rule.When.RequiredTargetAuras, nameof(rule.When.RequiredTargetAuras), errors);
                     ValidateAuraIds(rule.Id, rule.When.ForbiddenTargetAuras, nameof(rule.When.ForbiddenTargetAuras), errors);
                 }
+
+                // Validate acknowledgement kind (M8: enum member check per PLAN.md §8)
+                if (!IsValidAcknowledgement(rule.Acknowledgement))
+                    errors.Add($"Rule '{rule.Id}' has an unsupported acknowledgement kind ({(int)rule.Acknowledgement}).");
             }
         }
 
@@ -262,4 +266,13 @@ public static class CombatProfileLoader
         if (values is null || values.Any(string.IsNullOrWhiteSpace))
             errors.Add($"Rule '{ruleId}' {field} must contain non-empty aura ids.");
     }
+
+    /// <summary>
+    /// Reject acknowledgement kinds that are not defined enum members.
+    /// Per PLAN.md §8, only predicates proven by M1 live conformance may be enabled.
+    /// Until M1 conformance data is available, all defined members are accepted
+    /// and the allowlist is enforced as defense-in-depth against invalid JSON.
+    /// </summary>
+    private static bool IsValidAcknowledgement(AcknowledgementKind kind) =>
+        Enum.IsDefined(kind);
 }
