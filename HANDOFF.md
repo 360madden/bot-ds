@@ -2,7 +2,7 @@
 
 Last updated: **2026-07-21k** (authoritative resume snapshot)
 
-**Repo:** `C:\work\bot-ds` · **Branch:** `master` · **Last committed HEAD:** `a0a8be4` (large uncommitted working tree — do not discard; user has not requested commit)
+**Repo:** `C:\work\bot-ds` · **Branch:** `master` (tracks `origin/main`) · **Remote:** https://github.com/360madden/bot-ds · **HEAD:** `d9ba86f`
 
 ## Resume in one paragraph
 
