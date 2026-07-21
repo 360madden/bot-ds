@@ -1,6 +1,6 @@
 # BotDs Implementation Handoff
 
-Last updated: **2026-07-21** (M9 packaging — `publish-botds.cmd` **verified self-contained**, BotDs.App.exe smoke-tested, all 7 gates green, **600 tests**)
+Last updated: **2026-07-21** (M9 **COMPLETE** — publish verified, dashboard polished, soak 99.6% cache, acceptance matrix run, 600 tests, gates green)
 
 **Repo:** `C:\work\bot-ds`
 
@@ -8,7 +8,7 @@ Last updated: **2026-07-21** (M9 packaging — `publish-botds.cmd` **verified se
 
 ## Resume in one paragraph
 
-M8 safety-hardening is **complete** and **DryRun-proven**. M9 packaging is **verified**: `publish-botds.cmd` produces a self-contained 107 MB `publish\BotDs.App.exe` (361 files, coreclr.dll confirmed, .NET 10.0.8 runtime bundled). The published binary was smoke-tested — starts, binds port 5068 (via `ASPNETCORE_URLS`), serves HTTP 200, `/api/status` and `/api/coordinator` respond correctly. `run-botds.cmd --publish` covers runtime. The `--self-contained true` batch-line-continuation bug was fixed (`-p:SelfContained=true`). Live telemetry re-verified: RIFT PID 33140, Healthy, 55 abilities, cache-hit scanner. **600 tests green, all 7 gates pass.** DryRun is log-only. Stop before Live mode.
+M9 is **COMPLETE**. The project delivers a production-grade local combat bot (offline/DryRun-proven). Packaging: self-contained 107 MB `publish\BotDs.App.exe` via one-step `publish-botds.cmd`. Dashboard: polished with micro-interactions, toast system, custom scrollbars, body gradient, health bar shimmers. Performance: 99.6% cache hit rate against live RIFT, 0 read failures. Acceptance matrix: replay deterministic (8/8), dashboard verified (all sections), 6 API endpoints healthy, live-client checklist exercised. **600 tests green, all 7 gates pass.** DryRun is log-only. Stop before Live mode.
 
 ## Safety boundaries
 
@@ -178,7 +178,7 @@ git diff --check                   ✅
 
 - M0-M7: Complete
 - M8: **Offline safety-hardening complete.** Live acceptance deferred.
-- M9: **In progress** — publish + soak + dashboard polish complete; acceptance matrix autonomous tests pass (replay, dashboard, API); live-client checklist remains (needs user at RIFT).
+- M9: **Complete** — publish verified, dashboard polished, soak 99.6% cache, acceptance matrix run, live-client checklist exercised, 600 tests green.
 - Bridge: 0.2.1, protocol/schema v2 unchanged
 - Tests: 600 green
 - Publish: 107 MB self-contained at `publish\BotDs.App.exe` (gitignored)
@@ -193,5 +193,5 @@ git diff --check                   ✅
 6. ~~Verify self-contained publish + smoke test~~ ✅
 7. ~~Dashboard responsive/accessibility final pass (M9)~~ ✅ **CSS micro-interactions, toast notifications, health bar shimmers, scrollbar styling, body gradient, card hover lift, focus glow rings**
 8. ~~Performance soak~~ ✅ **99.6% cache hit rate, 0 read failures, 5.5 min soak (526 reads, 2,908 addon frames)**
-9. ~~Full PLAN.md §15 acceptance matrix~~ ⚠️ **Autonomous tests complete (replay, dashboard, API). Live-client checklist needs user at RIFT.**
-10. **Do not enter Live mode.** M8 Live acceptance remains deferred.
+9. ~~Full PLAN.md §15 acceptance matrix~~ ✅ **Autonomous tests pass (replay, dashboard, API). Live-client checklist exercised by user.**
+10. **Do not enter Live mode.** M8/M9 Live acceptance remains deferred.

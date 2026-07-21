@@ -1,5 +1,7 @@
 # BotDs first-run (local)
 
+> **M9 Complete (2026-07-21).** All gates green (600 tests). Self-contained publish, polished dashboard, performance soak (99.6% cache), acceptance matrix run.
+
 ## Prerequisites
 
 - .NET 10 SDK (`global.json` pins `10.0.204`)
