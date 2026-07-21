@@ -18,7 +18,7 @@
 -- must be solved before this emitter is used for live telemetry.
 
 -- Keep in sync with RiftAddon.toc Version=
-local ADDON_VERSION = "0.2.0"
+local ADDON_VERSION = "0.2.1"
 local PROTOCOL_VERSION = 5
 local BUFFER_SLOT_SIZE = 8192
 local REGION_TOTAL_SIZE = 16400
@@ -724,8 +724,19 @@ local function encode_abilities()
     local isKnown = false
     local parts = {}
 
-    local ok, ids = pcall(Inspect.Ability.New.List)
-    if ok and ids then
+    local listFn = nil
+    local detailFn = nil
+    if type(Inspect) == "table" and type(Inspect.Ability) == "table"
+        and type(Inspect.Ability.New) == "table" then
+        listFn = Inspect.Ability.New.List
+        detailFn = Inspect.Ability.New.Detail
+    end
+
+    local ok, ids = false, nil
+    if type(listFn) == "function" and type(detailFn) == "function" then
+        ok, ids = pcall(listFn)
+    end
+    if ok and type(ids) == "table" then
         local complete = true
         -- ipairs may miss dict-style id maps used by some clients; also try pairs
         local iterList = ids
@@ -741,7 +752,7 @@ local function encode_abilities()
                 complete = false
                 break
             end
-            local dok, detail = pcall(Inspect.Ability.New.Detail, abilityId)
+            local dok, detail = pcall(detailFn, abilityId)
             if dok and detail then
                 -- Available = we resolved detail for a listed ability
                 local aFlags = 0x01
@@ -784,7 +795,7 @@ local function encode_abilities()
                 complete = false
             end
         end
-        isKnown = complete or count > 0
+        isKnown = complete
     end
 
     local header = string.char(band(count, 0xFF), band(rshift(count, 8), 0xFF))
@@ -794,27 +805,33 @@ end
 -- Action bar observation for key calibration (does not invent keys).
 -- Wire: page:u8, count:u8, then count × (slot:u8 + abilityId:32 space-padded).
 local function encode_action_bar()
-    local page = 0
-    local pok, pval = pcall(function()
-        if type(Action) == "table" and type(Action.Bar) == "table"
-            and type(Action.Bar.Page) == "table" and type(Action.Bar.Page.Get) == "function" then
-            return Action.Bar.Page.Get()
+    local pageGetter = nil
+    local actionGetter = nil
+    if type(Action) == "table" then
+        actionGetter = Action.Get
+        if type(Action.Bar) == "table" and type(Action.Bar.Page) == "table" then
+            pageGetter = Action.Bar.Page.Get
         end
-        return nil
-    end)
-    if pok and type(pval) == "number" then page = math.floor(pval) end
+    end
+    if type(pageGetter) ~= "function" or type(actionGetter) ~= "function" then
+        return string.char(0, 0), false
+    end
+
+    local page = 0
+    local pok, pval = pcall(pageGetter)
+    if not pok or type(pval) ~= "number" then
+        return string.char(0, 0), false
+    end
+    page = math.floor(pval)
     if page < 0 then page = 0 end
     if page > 255 then page = 255 end
 
     local slots = {}
     local slotCount = 0
+    local complete = true
     for slot = 1, 12 do
-        local aok, action = pcall(function()
-            if type(Action) == "table" and type(Action.Get) == "function" then
-                return Action.Get(slot)
-            end
-            return nil
-        end)
+        local aok, action = pcall(actionGetter, slot)
+        if not aok then complete = false end
         local id = ""
         if aok and type(action) == "table" then
             local t = action.type
@@ -831,7 +848,7 @@ local function encode_action_bar()
     end
 
     local header = string.char(band(page, 0xFF), band(slotCount, 0xFF))
-    return header .. table.concat(slots), true
+    return header .. table.concat(slots), complete
 end
 
 -- Build an auras list section (PROTOCOL.md §4.4).
@@ -995,7 +1012,7 @@ local function crc32_bytes(startPos, len1, start2, len2)
     return bxor(crc, 0xFFFFFFFF)
 end
 
-local function write_frame(bufferOffset, inputReady, refreshInventory)
+local function write_frame(bufferOffset, inputReadyKnown, inputReady, refreshInventory)
     sequence = sequence + 1
     local frameTime = math.floor((Inspect.Time.Frame() or 0) * 1000)
     local isSecure = false
@@ -1027,8 +1044,10 @@ local function write_frame(bufferOffset, inputReady, refreshInventory)
     if isSecure then
         flags = bor(flags, 0x02)
     end
-    flags = bor(flags, 0x08) -- GameInputReadyKnown
-    if inputReady then
+    if inputReadyKnown then
+        flags = bor(flags, 0x08) -- GameInputReadyKnown
+    end
+    if inputReadyKnown and inputReady then
         flags = bor(flags, 0x04) -- GameInputReady
     end
     rb_u8(base + HDR_FLAGS, flags)
@@ -1063,44 +1082,37 @@ end
 -- the initial frame before any event-driven update fires.
 ----------------------------------------------------------------------
 local indicatorFrame = nil
-local gameInputReady = true
+local gameInputReadyKnown = false
+local gameInputReady = false
 
 -- Check if game input is ready (not in chat, keybind screen, or modal dialog).
 -- Must not index optional UI tables at the call site: pcall(UI.Textfield.Focus)
 -- still evaluates UI.Textfield before entering pcall and errors when nil.
 local function check_game_input_ready()
-    local ok, ready = pcall(function()
-        -- Chat / edit focus (API may be absent on some client builds)
-        if type(UI) == "table" and type(UI.Textfield) == "table"
-            and type(UI.Textfield.Focus) == "function" then
-            local focus = UI.Textfield.Focus()
-            if focus then
-                return false
-            end
+    local probe = nil
+    if type(UI) == "table" and type(UI.Textfield) == "table" then
+        if type(UI.Textfield.Focus) == "function" then
+            probe = UI.Textfield.Focus
+        elseif type(UI.Textfield.GetFocus) == "function" then
+            probe = UI.Textfield.GetFocus
         end
-        -- Optional alternate focus probe used by some clients
-        if type(UI) == "table" and type(UI.Textfield) == "table"
-            and type(UI.Textfield.GetFocus) == "function" then
-            local focus = UI.Textfield.GetFocus()
-            if focus then
-                return false
-            end
-        end
-        return true
-    end)
-    if not ok then
-        -- Unknown input readiness: prefer ready so we still emit frames;
-        -- C# treats nil/unknown separately when flags are known.
-        return true
     end
-    return ready and true or false
+    if not probe then
+        return false, false
+    end
+
+    local ok, focus = pcall(probe)
+    if not ok then
+        return false, false
+    end
+    return true, not focus
 end
 
 -- Update UI indicator color based on state
 local function update_indicator()
     if not indicatorFrame then return end
     local r, g, b = 0.3, 1.0, 0.3 -- green = healthy
-    if not gameInputReady then
+    if not gameInputReadyKnown or not gameInputReady then
         r, g, b = 1.0, 0.7, 0.2 -- yellow = input blocked
     end
     if not region then
@@ -1117,7 +1129,7 @@ local function on_update_begin()
     end
     lastPublishTime = now
 
-    gameInputReady = check_game_input_ready()
+    gameInputReadyKnown, gameInputReady = check_game_input_ready()
 
     if not regionBytes then
         init_region()
@@ -1138,7 +1150,7 @@ local function on_update_begin()
         writeBufferIndex = 0
     end
 
-    write_frame(bufferOffset, gameInputReady, refreshInventory)
+    write_frame(bufferOffset, gameInputReadyKnown, gameInputReady, refreshInventory)
     update_indicator()
 end
 

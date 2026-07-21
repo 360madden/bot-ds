@@ -65,6 +65,26 @@ public sealed class ActionAcknowledgementTests
         Assert.Equal(AcknowledgementMatch.Matched, ActionAcknowledgementMatcher.TryMatch(baseline, post));
     }
 
+    [Theory]
+    [InlineData(AcknowledgementKind.Resource)]
+    [InlineData(AcknowledgementKind.Aura)]
+    [InlineData(AcknowledgementKind.CombatEvent)]
+    public void Weak_acknowledgements_remain_pending_without_explicit_predicates(
+        AcknowledgementKind acknowledgement)
+    {
+        ActionDecision decision = new("r1", "slice", "1001", "1", acknowledgement, 10);
+        TelemetryFrame pre = Frame(seq: 10);
+        PendingActionBaseline baseline = ActionAcknowledgementMatcher.CaptureBaseline(
+            decision, pre, DateTimeOffset.UtcNow);
+        TelemetryFrame post = Frame(seq: 11, session: pre.Provider.SessionId) with
+        {
+            Player = pre.Player! with { Resource = new ResourceState("Power", 75, 100) },
+            PlayerAuras = [new AuraState("a1", "Aura", "player-1", 1, 1000, false)],
+        };
+
+        Assert.Equal(AcknowledgementMatch.Pending, ActionAcknowledgementMatcher.TryMatch(baseline, post));
+    }
+
     [Fact]
     public void Binding_tracker_blocks_unverified_required_bindings_for_live()
     {

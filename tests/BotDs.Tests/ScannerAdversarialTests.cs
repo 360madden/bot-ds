@@ -189,12 +189,10 @@ public sealed class ScannerAdversarialTests
             new ProcessSelector { ProcessId = 42 }, TimeSpan.FromSeconds(5),
             readerFactory: fact, scannerOptions: opts);
         var result = svc.Read();
-        // Limit hit is always recorded; partial ranked selection may still be usable.
+        // The single partial candidate is a unique selection and may recover.
         Assert.True(result.Metrics.CandidateLimitHits > 0);
-        if (result.IsUsable)
-            Assert.NotNull(result.Frame);
-        else
-            Assert.Equal(ReaderFailureCode.CandidateLimitExceeded, result.FailureCode);
+        Assert.True(result.IsUsable, result.FailureCode.ToString());
+        Assert.NotNull(result.Frame);
     }
 
     // ────────────────────────────────────────────────────────────────
@@ -1323,7 +1321,10 @@ public sealed class ScannerAdversarialTests
         // (Lua emitters leave many GC'd region copies that hit MaxCandidates).
         Assert.True(result.Metrics.CandidateLimitHits > 0, "CandidateLimitHits should increment when cap is hit");
         if (!result.IsUsable)
+        {
+            Assert.Equal(ReaderFailureCode.CandidateAmbiguous, result.FailureCode);
             Assert.True(result.Metrics.ReadCycleFailures > 0, "ReadCycleFailures should increment when still unusable");
+        }
     }
 
     [Fact]

@@ -59,7 +59,8 @@ public sealed record ProviderStatus(
     bool IsTruncated = false,
     bool IsHeartbeat = false,
     long SourceGeneration = 0,
-    TimeSpan GameStateEvidenceAge = default)
+    TimeSpan GameStateEvidenceAge = default,
+    int? AttachmentProcessId = null)
 {
     public bool IsUsable(TimeSpan maximumAge) => IsUsable(maximumAge, DateTimeOffset.UtcNow);
 

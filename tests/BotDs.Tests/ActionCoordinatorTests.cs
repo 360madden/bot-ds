@@ -63,13 +63,13 @@ public sealed class ActionCoordinatorTests : IDisposable
         Assert.True(coord.TrySetMode(OutputMode.DryRun, MaxAge));
         sm.Arm();
 
-        // First dispatch creates pending action
+        // DryRun records rate limits but never creates a pending action.
         var r1 = coord.Consume(CreateHealthyResult(actionKey: "1"), sm.Generation);
         Assert.Equal(DispatchOutcome.Dispatched, r1!.Outcome);
 
-        // Second dispatch blocked by pending action (checked before rate limits)
+        // Second dispatch is blocked by the global rate limit.
         var r2 = coord.Consume(CreateHealthyResult(actionKey: "2"), sm.Generation);
-        Assert.Equal(DispatchOutcome.PendingActionBlocked, r2!.Outcome);
+        Assert.Equal(DispatchOutcome.RateLimited, r2!.Outcome);
     }
 
     [Fact]
@@ -80,17 +80,17 @@ public sealed class ActionCoordinatorTests : IDisposable
         Assert.True(coord.TrySetMode(OutputMode.DryRun, MaxAge));
         sm.Arm();
 
-        // First dispatch creates pending action
+        // First observational dispatch updates the rate-limit history only.
         var r1 = coord.Consume(CreateHealthyResult(actionKey: "1"), sm.Generation);
         Assert.Equal(DispatchOutcome.Dispatched, r1!.Outcome);
 
-        // Second dispatch with same key blocked by pending action
+        // Second dispatch with the same key is rate limited.
         var r2 = coord.Consume(CreateHealthyResult(actionKey: "1"), sm.Generation);
-        Assert.Equal(DispatchOutcome.PendingActionBlocked, r2!.Outcome);
+        Assert.Equal(DispatchOutcome.RateLimited, r2!.Outcome);
     }
 
     [Fact]
-    public async Task Pending_action_blocks_further_dispatches()
+    public async Task DryRun_never_creates_pending_action()
     {
         var (coord, _, _, _, sm) = await CreateReadyCoordinator();
 
@@ -99,11 +99,12 @@ public sealed class ActionCoordinatorTests : IDisposable
 
         var r1 = coord.Consume(CreateHealthyResult(actionKey: "1"), sm.Generation);
         Assert.Equal(DispatchOutcome.Dispatched, r1!.Outcome);
-        Assert.NotNull(coord.PendingAction);
+        Assert.Null(coord.PendingAction);
 
         var r2 = coord.Consume(CreateHealthyResult(actionKey: "2"), sm.Generation);
         Assert.NotNull(r2);
-        Assert.True(r2!.Outcome is DispatchOutcome.PendingActionBlocked or DispatchOutcome.RateLimited);
+        Assert.Equal(DispatchOutcome.RateLimited, r2!.Outcome);
+        Assert.Null(coord.PendingAction);
     }
 
     [Fact]
@@ -116,7 +117,7 @@ public sealed class ActionCoordinatorTests : IDisposable
 
         var r1 = coord.Consume(CreateHealthyResult(actionKey: "1"), sm.Generation);
         Assert.Equal(DispatchOutcome.Dispatched, r1!.Outcome);
-        Assert.NotNull(coord.PendingAction);
+        Assert.Null(coord.PendingAction);
 
         coord.Disable();
         Assert.Null(coord.PendingAction);
@@ -147,7 +148,7 @@ public sealed class ActionCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task ObservePending_acknowledges_cooldown_and_verifies_binding()
+    public async Task DryRun_observations_do_not_acknowledge_or_verify_binding()
     {
         var (coord, _, pub, _, sm) = await CreateReadyCoordinator();
         Assert.True(coord.TrySetMode(OutputMode.DryRun, MaxAge));
@@ -158,7 +159,7 @@ public sealed class ActionCoordinatorTests : IDisposable
 
         var r1 = coord.Consume(CreateHealthyResult(actionKey: "1", sequence: 100), sm.Generation);
         Assert.Equal(DispatchOutcome.Dispatched, r1!.Outcome);
-        Assert.NotNull(coord.PendingAction);
+        Assert.Null(coord.PendingAction);
         Assert.Equal(BindingVerificationState.Unverified, coord.Bindings.GetState("slice"));
 
         TelemetryFrame post = CreateHealthyFrame(
@@ -168,10 +169,44 @@ public sealed class ActionCoordinatorTests : IDisposable
         pub.Publish(post);
 
         var ack = coord.ObservePending(post, sm.Generation);
-        Assert.NotNull(ack);
-        Assert.Equal(DispatchOutcome.Acknowledged, ack!.Outcome);
+        Assert.Null(ack);
         Assert.Null(coord.PendingAction);
-        Assert.Equal(BindingVerificationState.Verified, coord.Bindings.GetState("slice"));
+        Assert.Equal(BindingVerificationState.Unverified, coord.Bindings.GetState("slice"));
+    }
+
+    [Fact]
+    public async Task DryRun_never_calls_sink_or_stops_on_manual_game_action()
+    {
+        var sink = new TestLiveKeySink { ThrowOnDispatch = true };
+        var (coord, _, pub, _, sm) = await CreateReadyCoordinator(keySink: sink);
+        coord.Bindings.MarkMismatch("slice");
+        BindingVerificationSnapshot before = coord.Bindings.Snapshot();
+
+        Assert.True(coord.TrySetMode(OutputMode.DryRun, MaxAge));
+        sm.Arm();
+        TelemetryFrame pre = CreateHealthyFrame(sequence: 200);
+        pub.Publish(pre);
+
+        DispatchRecord? dispatched = coord.Consume(
+            CreateHealthyResult(sequence: 200), sm.Generation);
+        Assert.Equal(DispatchOutcome.Dispatched, dispatched!.Outcome);
+        Assert.Equal("dry-run", dispatched.Detail);
+        Assert.Equal(0, sink.DispatchCount);
+        Assert.Null(coord.PendingAction);
+
+        TelemetryFrame manualAction = CreateHealthyFrame(
+            sequence: 201,
+            cooldownRemainingMs: 1500,
+            sessionId: pre.Provider.SessionId);
+        pub.Publish(manualAction);
+        Assert.Null(coord.ObservePending(manualAction, sm.Generation));
+        Assert.NotEqual(ControllerState.Stopped, sm.State);
+        Assert.Equal(OutputMode.DryRun, coord.Mode);
+        BindingVerificationSnapshot after = coord.Bindings.Snapshot();
+        Assert.Equal(before.Generation, after.Generation);
+        Assert.Equal(before.ProfileId, after.ProfileId);
+        Assert.Equal(before.ProviderSessionId, after.ProviderSessionId);
+        Assert.Equal(BindingVerificationState.Mismatch, coord.Bindings.GetState("slice"));
     }
 
     [Fact]
@@ -218,25 +253,232 @@ public sealed class ActionCoordinatorTests : IDisposable
         Assert.Equal(OutputMode.Disabled, coord.Mode);
     }
 
+    [Fact]
+    public async Task Live_fence_dispatches_once_for_same_target_newer_valid_frame()
+    {
+        var sink = new TestLiveKeySink();
+        var (coord, profiles, pub, _, sm) = await CreateReadyCoordinator(
+            keySink: sink,
+            detectExternalActionConflicts: false);
+        coord.Bindings.MarkVerified("slice");
+        Assert.True(coord.TrySetMode(OutputMode.Live, MaxAge));
+        sm.Arm();
+
+        TelemetryFrame decisionFrame = CreateHealthyFrame(sequence: 100);
+        pub.Publish(decisionFrame);
+        ActionDecision decision = new CombatEvaluator(MaxAge).Evaluate(
+            profiles.ActiveProfile!, decisionFrame).Action!;
+        pub.Publish(NextSequence(decisionFrame));
+
+        DispatchRecord? record = coord.Consume(
+            new EvaluationResult(ControllerState.Armed, decision, []), sm.Generation);
+
+        Assert.Equal(DispatchOutcome.Dispatched, record!.Outcome);
+        Assert.Equal(1, sink.DispatchCount);
+        Assert.NotNull(coord.PendingAction);
+    }
+
+    [Fact]
+    public async Task Live_fence_accepts_uint_sequence_wrap()
+    {
+        var sink = new TestLiveKeySink();
+        var (coord, profiles, pub, _, sm) = await CreateReadyCoordinator(
+            keySink: sink,
+            detectExternalActionConflicts: false);
+        coord.Bindings.MarkVerified("slice");
+        Assert.True(coord.TrySetMode(OutputMode.Live, MaxAge));
+        sm.Arm();
+
+        TelemetryFrame decisionFrame = CreateHealthyFrame(sequence: uint.MaxValue);
+        pub.Publish(decisionFrame);
+        ActionDecision decision = new CombatEvaluator(MaxAge).Evaluate(
+            profiles.ActiveProfile!, decisionFrame).Action!;
+        pub.Publish(decisionFrame with
+        {
+            Provider = decisionFrame.Provider with { Sequence = 0 },
+        });
+
+        DispatchRecord? record = coord.Consume(
+            new EvaluationResult(ControllerState.Armed, decision, []), sm.Generation);
+
+        Assert.Equal(DispatchOutcome.Dispatched, record!.Outcome);
+        Assert.Equal(1, sink.DispatchCount);
+    }
+
+    [Fact]
+    public async Task Live_fence_rejects_transient_game_state_changes_without_input_or_pending()
+    {
+        await AssertLiveFenceRejects(frame => frame with
+        {
+            Provider = frame.Provider with { Sequence = frame.Provider.Sequence + 1 },
+            Target = frame.Target! with { Id = "target-2" },
+        }, fatal: false);
+        await AssertLiveFenceRejects(frame => frame with
+        {
+            Provider = frame.Provider with { Sequence = frame.Provider.Sequence + 1 },
+            Target = null,
+            TargetKnownness = TargetKnownness.KnownNoTarget,
+        }, fatal: false);
+        await AssertLiveFenceRejects(frame => frame with
+        {
+            Provider = frame.Provider with { Sequence = frame.Provider.Sequence + 1 },
+            Target = frame.Target! with { Health = new HealthState(0, 3000) },
+        }, fatal: false);
+        await AssertLiveFenceRejects(frame => frame with
+        {
+            Provider = frame.Provider with { Sequence = frame.Provider.Sequence + 1 },
+            Player = frame.Player! with { Health = new HealthState(0, 5000) },
+        }, fatal: false);
+        await AssertLiveFenceRejects(frame => NextSequence(frame) with { GameInputReady = false }, fatal: false);
+        await AssertLiveFenceRejects(frame => NextSequence(frame) with { GameInputReady = null }, fatal: false);
+        await AssertLiveFenceRejects(frame => WithAbility(
+            NextSequence(frame), ability => ability with { CooldownRemainingMilliseconds = 1000 }), fatal: false);
+    }
+
+    [Fact]
+    public async Task Live_fence_stops_and_disables_on_provider_identity_or_integrity_change()
+    {
+        await AssertLiveFenceRejects(frame => frame with
+        {
+            Provider = frame.Provider with
+            {
+                Sequence = frame.Provider.Sequence + 1,
+                SessionId = "session-2",
+            },
+        }, fatal: true);
+        await AssertLiveFenceRejects(frame => frame with
+        {
+            Provider = frame.Provider with
+            {
+                Sequence = frame.Provider.Sequence + 1,
+                SourceGeneration = 2,
+            },
+        }, fatal: true);
+        await AssertLiveFenceRejects(frame => frame with
+        {
+            Provider = frame.Provider with
+            {
+                Sequence = frame.Provider.Sequence + 1,
+                AttachmentProcessId = 9999,
+            },
+        }, fatal: true);
+        await AssertLiveFenceRejects(frame => frame with
+        {
+            Provider = frame.Provider with
+            {
+                Sequence = frame.Provider.Sequence + 1,
+                Health = ProviderHealth.Stale,
+            },
+        }, fatal: true);
+    }
+
+    [Fact]
+    public async Task Live_fence_rejects_changed_winning_rule_without_input()
+    {
+        var sink = new TestLiveKeySink();
+        var (coord, profiles, pub, _, sm) = await CreateReadyCoordinator(
+            keySink: sink,
+            detectExternalActionConflicts: false,
+            profileJson: CreateTwoRuleProfileJson());
+        coord.Bindings.MarkVerified("slice");
+        Assert.True(coord.TrySetMode(OutputMode.Live, MaxAge));
+        sm.Arm();
+
+        TelemetryFrame decisionFrame = CreateHealthyFrame(sequence: 300) with
+        {
+            Player = CreateHealthyFrame(sequence: 300).Player! with
+            {
+                Health = new HealthState(2000, 5000),
+            },
+        };
+        pub.Publish(decisionFrame);
+        ActionDecision decision = new CombatEvaluator(MaxAge).Evaluate(
+            profiles.ActiveProfile!, decisionFrame).Action!;
+        Assert.Equal("low-health", decision.RuleId);
+
+        TelemetryFrame latest = NextSequence(decisionFrame) with
+        {
+            Player = decisionFrame.Player! with { Health = new HealthState(5000, 5000) },
+        };
+        pub.Publish(latest);
+        DispatchRecord? record = coord.Consume(
+            new EvaluationResult(ControllerState.Armed, decision, []), sm.Generation);
+
+        Assert.Equal(DispatchOutcome.RevalidationFailed, record!.Outcome);
+        Assert.Equal(0, sink.DispatchCount);
+        Assert.Null(coord.PendingAction);
+        Assert.Equal(OutputMode.Live, coord.Mode);
+    }
+
+    [Fact]
+    public async Task Live_mode_rejects_fake_missing_mismatched_and_unready_sinks()
+    {
+        var (fakeCoord, _, _, _, _) = await CreateReadyCoordinator(keySink: new FakeKeySink());
+        fakeCoord.Bindings.MarkVerified("slice");
+        Assert.False(fakeCoord.TrySetMode(OutputMode.Live, MaxAge));
+        Assert.Contains(fakeCoord.GetLiveBlockers(), b => b.Contains("does not support", StringComparison.OrdinalIgnoreCase));
+
+        // A zero telemetry PID is a distinct blocker from the sink's bound PID.
+        // Publish after fixture setup so readiness sees the missing identity.
+        // Reusing the fixture publisher is intentionally avoided below.
+        var missing = await CreateReadyCoordinator(keySink: new TestLiveKeySink(4242));
+        missing.Item3.Publish(CreateHealthyFrame() with
+        {
+            Provider = CreateHealthyFrame().Provider with { AttachmentProcessId = null },
+        });
+        missing.Item1.Bindings.MarkVerified("slice");
+        Assert.False(missing.Item1.TrySetMode(OutputMode.Live, MaxAge));
+
+        var (mismatchCoord, _, _, _, _) = await CreateReadyCoordinator(keySink: new TestLiveKeySink(9999));
+        mismatchCoord.Bindings.MarkVerified("slice");
+        Assert.False(mismatchCoord.TrySetMode(OutputMode.Live, MaxAge));
+
+        var unreadySink = new TestLiveKeySink { Ready = false };
+        var (unreadyCoord, _, _, _, _) = await CreateReadyCoordinator(keySink: unreadySink);
+        unreadyCoord.Bindings.MarkVerified("slice");
+        Assert.False(unreadyCoord.TrySetMode(OutputMode.Live, MaxAge));
+    }
+
+    [Fact]
+    public async Task Live_mode_rejects_unsupported_acknowledgement_but_DryRun_allows_it()
+    {
+        string profileJson = CreateValidProfileJson().Replace(
+            "\"id\":\"r1\",\"ability\":\"slice\",\"enabled\":true}",
+            "\"id\":\"r1\",\"ability\":\"slice\",\"enabled\":true,\"acknowledgement\":\"resource\"}",
+            StringComparison.Ordinal);
+        var (coord, _, _, _, _) = await CreateReadyCoordinator(profileJson: profileJson);
+
+        Assert.True(coord.TrySetMode(OutputMode.DryRun, MaxAge));
+        coord.Disable();
+        coord.Bindings.MarkVerified("slice");
+        Assert.False(coord.TrySetMode(OutputMode.Live, MaxAge));
+        Assert.Contains(coord.GetLiveBlockers(), b => b.Contains("unsupported", StringComparison.OrdinalIgnoreCase));
+    }
+
     // ---- Helpers ----
 
     private async Task<(ActionCoordinator, ProfileService, SnapshotPublisher, ArmingReadinessService, ControllerStateMachine)>
-        CreateReadyCoordinator(TimeProvider? timeProvider = null, DateTimeOffset? frameNow = null)
+        CreateReadyCoordinator(
+            TimeProvider? timeProvider = null,
+            DateTimeOffset? frameNow = null,
+            IKeySink? keySink = null,
+            bool detectExternalActionConflicts = true,
+            string? profileJson = null)
     {
         TimeProvider clock = timeProvider ?? TimeProvider.System;
         var pub = new SnapshotPublisher(clock);
         var profiles = await CreateProfileService("test-profile");
-        WriteProfileFile(CreateValidProfileJson());
+        WriteProfileFile(profileJson ?? CreateValidProfileJson());
         await profiles.ReloadAsync();
         profiles.SetActiveProfile("test-profile");
         pub.Publish(CreateHealthyFrame(now: frameNow ?? clock.GetUtcNow()));
         var readiness = new ArmingReadinessService(pub, profiles, clock);
         var sm = new ControllerStateMachine(new NullLogger<ControllerStateMachine>());
-        var config = CreateConfig();
+        var config = CreateConfig(detectExternalActionConflicts);
         var bindings = new BindingVerificationTracker();
         var coord = new ActionCoordinator(
             pub, sm, profiles, readiness, config,
-            keySink: new FakeKeySink(),
+            keySink: keySink ?? new TestLiveKeySink(),
             timeProvider: clock,
             bindingVerification: bindings);
         return (coord, profiles, pub, readiness, sm);
@@ -304,7 +546,7 @@ public sealed class ActionCoordinatorTests : IDisposable
         });
     }
 
-    private static IConfigurationRoot CreateConfig()
+    private static IConfigurationRoot CreateConfig(bool detectExternalActionConflicts = true)
     {
         return new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -313,6 +555,7 @@ public sealed class ActionCoordinatorTests : IDisposable
                 ["BotDs:Action:MaxGlobalPerSecond"] = "4",
                 ["BotDs:Action:MaxPerKeyPerSecond"] = "2",
                 ["BotDs:Evaluator:MaximumTelemetryAgeMs"] = "500",
+                ["BotDs:Action:DetectExternalActionConflicts"] = detectExternalActionConflicts ? "true" : "false",
             })
             .Build();
     }
@@ -321,7 +564,12 @@ public sealed class ActionCoordinatorTests : IDisposable
     {
         return new EvaluationResult(
             ControllerState.Armed,
-            new ActionDecision("r1", "slice", "1001", actionKey, AcknowledgementKind.Cooldown, sequence),
+            new ActionDecision(
+                "r1", "slice", "1001", actionKey, AcknowledgementKind.Cooldown, sequence,
+                ProviderSessionId: "session-1",
+                SourceGeneration: 1,
+                TargetId: "target-1",
+                AttachmentProcessId: 4242),
             []);
     }
 
@@ -336,12 +584,13 @@ public sealed class ActionCoordinatorTests : IDisposable
             Provider: new ProviderStatus(
                 Health: ProviderHealth.Healthy,
                 ProtocolVersion: "5",
-                SessionId: sessionId ?? Guid.NewGuid().ToString("D"),
+                SessionId: sessionId ?? "session-1",
                 Sequence: sequence,
                 ProducerFrameMilliseconds: 16,
                 ReceivedAtUtc: receivedAt,
                 Age: TimeSpan.FromMilliseconds(10),
-                SourceGeneration: 1),
+                SourceGeneration: 1,
+                AttachmentProcessId: 4242),
             Player: new UnitState(
                 Id: "player-1", Name: "Test", Level: 50, Calling: "Warrior",
                 IsPlayer: true, Relation: "friendly",
@@ -365,7 +614,91 @@ public sealed class ActionCoordinatorTests : IDisposable
             TargetAuras: [],
             IsAbilitiesKnown: true,
             IsPlayerAurasKnown: true,
-            IsTargetAurasKnown: true);
+            IsTargetAurasKnown: true,
+            TargetKnownness: TargetKnownness.KnownTarget,
+            GameInputReady: true);
+    }
+
+    private async Task AssertLiveFenceRejects(
+        Func<TelemetryFrame, TelemetryFrame> mutate,
+        bool fatal)
+    {
+        var sink = new TestLiveKeySink();
+        var (coord, profiles, pub, _, sm) = await CreateReadyCoordinator(
+            keySink: sink,
+            detectExternalActionConflicts: false);
+        coord.Bindings.MarkVerified("slice");
+        Assert.True(coord.TrySetMode(OutputMode.Live, MaxAge));
+        sm.Arm();
+
+        TelemetryFrame decisionFrame = CreateHealthyFrame(sequence: 100);
+        pub.Publish(decisionFrame);
+        ActionDecision decision = new CombatEvaluator(MaxAge).Evaluate(
+            profiles.ActiveProfile!, decisionFrame).Action!;
+        pub.Publish(mutate(decisionFrame));
+
+        DispatchRecord? record = coord.Consume(
+            new EvaluationResult(ControllerState.Armed, decision, []), sm.Generation);
+
+        Assert.NotNull(record);
+        Assert.Equal(DispatchOutcome.RevalidationFailed, record!.Outcome);
+        Assert.Equal(0, sink.DispatchCount);
+        Assert.Null(coord.PendingAction);
+        if (fatal)
+        {
+            Assert.Equal(ControllerState.Stopped, sm.State);
+            Assert.Equal(OutputMode.Disabled, coord.Mode);
+        }
+        else
+        {
+            Assert.NotEqual(ControllerState.Stopped, sm.State);
+            Assert.Equal(OutputMode.Live, coord.Mode);
+        }
+    }
+
+    private static TelemetryFrame NextSequence(TelemetryFrame frame) => frame with
+    {
+        Provider = frame.Provider with { Sequence = frame.Provider.Sequence + 1 },
+    };
+
+    private static TelemetryFrame WithAbility(
+        TelemetryFrame frame,
+        Func<AbilityState, AbilityState> mutate)
+    {
+        var abilities = frame.Abilities.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Key == "1001" ? mutate(pair.Value) : pair.Value,
+            StringComparer.OrdinalIgnoreCase);
+        return frame with
+        {
+            Abilities = new ReadOnlyDictionary<string, AbilityState>(abilities),
+        };
+    }
+
+    private static string CreateTwoRuleProfileJson()
+    {
+        return JsonSerializer.Serialize(new
+        {
+            id = "test-profile",
+            profileVersion = 1,
+            enabled = true,
+            character = new { calling = "Warrior", minimumLevel = 1, maximumLevel = 60 },
+            abilities = new Dictionary<string, object>
+            {
+                ["slice"] = new { abilityId = "1001", key = "1", enabled = true },
+            },
+            rules = new object[]
+            {
+                new
+                {
+                    id = "low-health",
+                    ability = "slice",
+                    enabled = true,
+                    when = new { playerHealthBelowPercent = 50 },
+                },
+                new { id = "fallback", ability = "slice", enabled = true },
+            },
+        });
     }
 
     private sealed class TestHostEnv(string root) : IHostEnvironment

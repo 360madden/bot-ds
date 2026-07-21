@@ -100,9 +100,11 @@ public static class ActionAcknowledgementMatcher
         {
             AcknowledgementKind.Cast => MatchCast(baseline, frame),
             AcknowledgementKind.Cooldown => MatchCooldown(baseline, frame),
-            AcknowledgementKind.Resource => MatchResource(baseline, frame),
-            AcknowledgementKind.Aura => MatchAura(baseline, frame),
-            AcknowledgementKind.CombatEvent => AcknowledgementMatch.Pending, // no combat-event section yet
+            // These enum values remain load-compatible, but cannot acknowledge an
+            // action until profiles carry an explicit, ability-specific predicate.
+            AcknowledgementKind.Resource => AcknowledgementMatch.Pending,
+            AcknowledgementKind.Aura => AcknowledgementMatch.Pending,
+            AcknowledgementKind.CombatEvent => AcknowledgementMatch.Pending,
             _ => AcknowledgementMatch.Pending,
         };
     }
@@ -146,32 +148,6 @@ public static class ActionAcknowledgementMatcher
             return AcknowledgementMatch.Matched;
 
         return AcknowledgementMatch.Pending;
-    }
-
-    private static AcknowledgementMatch MatchResource(PendingActionBaseline baseline, TelemetryFrame frame)
-    {
-        int? current = frame.Player?.Resource?.Current;
-        if (current is null || baseline.ResourceCurrent is null)
-            return AcknowledgementMatch.Pending;
-
-        return current.Value != baseline.ResourceCurrent.Value
-            ? AcknowledgementMatch.Matched
-            : AcknowledgementMatch.Pending;
-    }
-
-    private static AcknowledgementMatch MatchAura(PendingActionBaseline baseline, TelemetryFrame frame)
-    {
-        // Without profile-declared aura id/transition predicates, only detect a
-        // set-level change on the player aura list as weak provisional evidence.
-        // Full aura acknowledgement requires M1-proven structured predicates.
-        if (!frame.IsPlayerAurasKnown)
-            return AcknowledgementMatch.Pending;
-
-        var current = ToIdSet(frame.PlayerAuras);
-        if (current.SetEquals(baseline.PlayerAuraIds))
-            return AcknowledgementMatch.Pending;
-
-        return AcknowledgementMatch.Matched;
     }
 
     private static HashSet<string> ToIdSet(IReadOnlyList<AuraState> auras)

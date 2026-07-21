@@ -10,11 +10,14 @@ public sealed class WindowsKeySinkTests
     private sealed class FakeInputInjector : IInputInjector
     {
         public readonly List<WindowsKeySink.INPUT[]> Calls = [];
+        public readonly Queue<InputInjectionResult> Results = [];
 
-        public bool Inject(WindowsKeySink.INPUT[] inputs, int count)
+        public InputInjectionResult Inject(WindowsKeySink.INPUT[] inputs, int count)
         {
             Calls.Add(inputs[..count]);
-            return true; // always succeeds
+            return Results.TryDequeue(out InputInjectionResult result)
+                ? result
+                : new InputInjectionResult(count);
         }
     }
 
@@ -79,14 +82,14 @@ public sealed class WindowsKeySinkTests
     }
 
     [Fact]
-    public void Dispatch_with_modifiers_succeeds_when_other_modifier_held()
+    public void Dispatch_with_modifiers_fails_when_other_modifier_held()
     {
         var fg = new FakeForegroundProvider(foregroundPid: 12345);
-        // SHIFT held, but binding is "Ctrl+1" — SHIFT doesn't block Ctrl+1
+        // Any user-held modifier blocks bot-owned key-up cleanup.
         fg.SetKeyHeld(0x10); // VK_SHIFT
         using var sink = new WindowsKeySink(12345, fg, CreateInjector());
 
-        Assert.True(sink.DispatchKey("Ctrl+1"));
+        Assert.False(sink.DispatchKey("Ctrl+1"));
     }
 
     [Fact]
@@ -209,6 +212,7 @@ public sealed class WindowsKeySinkTests
         using var sink = new WindowsKeySink(12345, fg, CreateInjector());
 
         Assert.Equal(12345, sink.BoundPid);
+        Assert.True(sink.SupportsLiveInput);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -265,6 +269,89 @@ public sealed class WindowsKeySinkTests
 
         Assert.False(sink.DispatchKey("1"));
         Assert.Empty(injector.Calls);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void Partial_down_runs_full_reverse_cleanup_and_latches_fault(int sentCount)
+    {
+        var fg = new FakeForegroundProvider(foregroundPid: 12345);
+        var injector = new FakeInputInjector();
+        injector.Results.Enqueue(new InputInjectionResult(sentCount, 5));
+        injector.Results.Enqueue(new InputInjectionResult(2));
+        using var sink = new WindowsKeySink(12345, fg, injector);
+
+        Assert.False(sink.DispatchKey("Shift+A"));
+        Assert.False(sink.IsReady);
+        Assert.Equal(2, injector.Calls.Count);
+        AssertReleaseOrder(injector.Calls[1], 0x41, 0x10);
+    }
+
+    [Fact]
+    public void Partial_key_up_runs_one_full_cleanup_and_latches_fault()
+    {
+        var fg = new FakeForegroundProvider(foregroundPid: 12345);
+        var injector = new FakeInputInjector();
+        injector.Results.Enqueue(new InputInjectionResult(2));
+        injector.Results.Enqueue(new InputInjectionResult(1, 5));
+        injector.Results.Enqueue(new InputInjectionResult(2));
+        using var sink = new WindowsKeySink(12345, fg, injector);
+
+        Assert.False(sink.DispatchKey("Shift+A"));
+        Assert.False(sink.IsReady);
+        Assert.Equal(3, injector.Calls.Count);
+        AssertReleaseOrder(injector.Calls[1], 0x41, 0x10);
+        AssertReleaseOrder(injector.Calls[2], 0x41, 0x10);
+    }
+
+    [Fact]
+    public void Cancellation_after_down_runs_full_cleanup_and_latches_fault()
+    {
+        var fg = new FakeForegroundProvider(foregroundPid: 12345);
+        var injector = new FakeInputInjector();
+        using var sink = new WindowsKeySink(12345, fg, injector);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.False(sink.DispatchKey("Ctrl+A", cts.Token));
+        Assert.False(sink.IsReady);
+        Assert.Equal(2, injector.Calls.Count);
+        AssertReleaseOrder(injector.Calls[1], 0x41, 0x11);
+    }
+
+    [Fact]
+    public void Cleanup_failure_still_runs_once_and_latches_fault()
+    {
+        var fg = new FakeForegroundProvider(foregroundPid: 12345);
+        var injector = new FakeInputInjector();
+        injector.Results.Enqueue(new InputInjectionResult(0, 5));
+        injector.Results.Enqueue(new InputInjectionResult(0, 5));
+        using var sink = new WindowsKeySink(12345, fg, injector);
+
+        Assert.False(sink.DispatchKey("Alt+A"));
+        Assert.False(sink.IsReady);
+        Assert.Equal(2, injector.Calls.Count);
+    }
+
+    [Fact]
+    public void Three_modifier_chord_uses_exact_down_and_reverse_up_order()
+    {
+        var fg = new FakeForegroundProvider(foregroundPid: 12345);
+        var injector = new FakeInputInjector();
+        using var sink = new WindowsKeySink(12345, fg, injector);
+
+        Assert.True(sink.DispatchKey("Shift+Ctrl+Alt+A"));
+        Assert.Equal(new ushort[] { 0x10, 0x11, 0x12, 0x41 },
+            injector.Calls[0].Select(input => input.u.ki.wVk));
+        Assert.Equal(new ushort[] { 0x41, 0x12, 0x11, 0x10 },
+            injector.Calls[1].Select(input => input.u.ki.wVk));
+    }
+
+    private static void AssertReleaseOrder(WindowsKeySink.INPUT[] inputs, params ushort[] keys)
+    {
+        Assert.Equal(keys, inputs.Select(input => input.u.ki.wVk));
+        Assert.All(inputs, input => Assert.Equal(0x0002u, input.u.ki.dwFlags));
     }
 }
 

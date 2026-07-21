@@ -170,18 +170,23 @@ public sealed class V5ScannerService : IDisposable
                         if (!_reader.CheckLiveness())
                         { DetachLocked(); return Fail(d, ProviderHealth.Disconnected, ReaderFailureCode.ProcessExit, "Process exited during scan", t0); }
 
-                        // Lua immutable-string emitters leave many GC'd region copies in process
-                        // memory. Hitting MaxCandidates is common; still try SelectBest on the
-                        // ranked partial set rather than hard-failing the whole cycle.
-                        // Only for pure candidate/raw-match limits — never for read/process failures.
-                        if (IsLimitOnlyIncomplete(sr.IncompleteCause)
-                            && sr.Candidates.Count > 0
-                            && TrySelectCandidate(sr.Candidates, out V5Candidate? partialBest, allowMaxSeqFallback: true)
-                            && partialBest is not null)
+                        // A limit-capped partial scan may recover only when the
+                        // candidates still have one unambiguous winner.
+                        V5SelectionResult partialSelection = V5SelectionResult.NoneValid;
+                        V5Candidate? partialBest = null;
+                        if (IsLimitOnlyIncomplete(sr.IncompleteCause) && sr.Candidates.Count > 0)
+                            partialSelection = V5FrameSelector.SelectBest(sr.Candidates, out partialBest);
+
+                        if (partialSelection == V5SelectionResult.Selected && partialBest is not null)
                         {
                             cand = partialBest;
                             _cachedAddr = cand.BaseAddress;
                             _hasCached = true;
+                        }
+                        else if (partialSelection == V5SelectionResult.Ambiguous)
+                        {
+                            return Fail(d, ProviderHealth.Faulted, ReaderFailureCode.CandidateAmbiguous,
+                                "Partial scan selection ambiguous", t0);
                         }
                         else
                         {
@@ -282,12 +287,18 @@ public sealed class V5ScannerService : IDisposable
                             d.CandidateLimit = 1;
                         if (!_reader.CheckLiveness())
                         { DetachLocked(); return Fail(d, ProviderHealth.Disconnected, ReaderFailureCode.ProcessExit, "Process exited during relo scan", t0); }
-                        if (IsLimitOnlyIncomplete(sr2.IncompleteCause)
-                            && sr2.Candidates.Count > 0
-                            && TrySelectCandidate(sr2.Candidates, out reloCand, allowMaxSeqFallback: true)
-                            && reloCand is not null)
+                        V5SelectionResult reloPartialSelection = V5SelectionResult.NoneValid;
+                        if (IsLimitOnlyIncomplete(sr2.IncompleteCause) && sr2.Candidates.Count > 0)
+                            reloPartialSelection = V5FrameSelector.SelectBest(sr2.Candidates, out reloCand);
+
+                        if (reloPartialSelection == V5SelectionResult.Selected && reloCand is not null)
                         {
                             // limit-capped partial recovery — continue with reloCand
+                        }
+                        else if (reloPartialSelection == V5SelectionResult.Ambiguous)
+                        {
+                            return Fail(d, ProviderHealth.Faulted, ReaderFailureCode.CandidateAmbiguous,
+                                "Partial relocation selection ambiguous", t0);
                         }
                         else if (IsLimitOnlyIncomplete(sr2.IncompleteCause) && srr.Frame is not null)
                         {
@@ -529,46 +540,6 @@ public sealed class V5ScannerService : IDisposable
         return c != ScanIncompleteCause.None
             && (c & limits) != 0
             && (c & ~limits) == 0;
-    }
-
-    /// <summary>
-    /// Prefer SelectBest. When <paramref name="allowMaxSeqFallback"/> is true (limit-capped
-    /// scans only), fall back to highest sequence among valid candidates so GC'd Lua region
-    /// copies do not permanently fault the provider.
-    /// </summary>
-    private static bool TrySelectCandidate(
-        IReadOnlyList<V5Candidate> candidates,
-        out V5Candidate? selected,
-        bool allowMaxSeqFallback = false)
-    {
-        var sel = V5FrameSelector.SelectBest(candidates, out selected);
-        if (sel == V5SelectionResult.Selected && selected is not null)
-            return true;
-
-        if (!allowMaxSeqFallback)
-            return false;
-
-        V5Candidate? best = null;
-        uint bestSeq = 0;
-        uint bestProd = 0;
-        foreach (var c in candidates)
-        {
-            if (!c.IsValid) continue;
-            var own = V5FrameSelector.Select(c.FrameA, c.FrameB, out var f);
-            if (own is not (V5SelectionResult.Selected or V5SelectionResult.Equivalent) || f is null)
-                continue;
-            uint seq = f.Header.Sequence;
-            uint prod = f.Header.ProducerFrameMs;
-            if (best is null || seq > bestSeq || (seq == bestSeq && prod >= bestProd))
-            {
-                best = c;
-                bestSeq = seq;
-                bestProd = prod;
-            }
-        }
-
-        selected = best;
-        return selected is not null;
     }
 
     private bool EnsureAttachedLocked()

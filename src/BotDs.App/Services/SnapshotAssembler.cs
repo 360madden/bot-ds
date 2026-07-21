@@ -66,6 +66,10 @@ internal sealed class SnapshotAssembler
             // Map the raw scanner result to a TelemetryFrame
             TelemetryFrame frame = V5HealthMapper.ToTelemetryFrame(
                 result.ReadResult, receivedAt, _sourceGeneration, gameStateEvidenceAge);
+            frame = frame with
+            {
+                Provider = frame.Provider with { AttachmentProcessId = result.AttachmentPid },
+            };
 
             if (hasGameState && frame.Player is not null)
             {

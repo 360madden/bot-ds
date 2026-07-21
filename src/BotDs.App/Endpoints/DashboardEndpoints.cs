@@ -69,11 +69,19 @@ public static class DashboardEndpoints
         }).ToList();
 
         BindingVerificationSnapshot bindings = coordinator.Bindings.Snapshot();
+        InputSinkStatus inputSink = coordinator.InputSink;
         return Results.Json(new
         {
             OutputMode = coordinator.Mode.ToString(),
             PendingAction = coordinator.PendingAction,
             RecentHistory = history,
+            InputSink = new
+            {
+                inputSink.SupportsLiveInput,
+                inputSink.IsReady,
+                inputSink.BoundProcessId,
+            },
+            LiveBlockers = coordinator.GetLiveBlockers(),
             EmergencyHotkey = new
             {
                 Binding = coordinator.EmergencyHotkey.Binding,
@@ -340,12 +348,14 @@ public static class DashboardEndpoints
     private static IResult Arm(
         [FromServices] ControllerStateMachine stateMachine,
         [FromServices] ArmingReadinessService readiness,
+        [FromServices] ActionCoordinator coordinator,
         [FromServices] IConfiguration configuration,
         [FromServices] ILogger<Program> log)
     {
         TimeSpan maxAge = TimeSpan.FromMilliseconds(
             configuration.GetValue<int>("BotDs:Evaluator:MaximumTelemetryAgeMs", 5000));
-        ReadinessResult ready = readiness.Evaluate(maxAge);
+        bool requireGameInputReady = coordinator.Mode == OutputMode.Live;
+        ReadinessResult ready = readiness.Evaluate(maxAge, requireGameInputReady);
         if (!ready.CanArm)
             return Results.BadRequest(new { Error = "Readiness check failed.", ready.Blockers });
 
@@ -521,6 +531,7 @@ public static class DashboardEndpoints
                 frame.Provider.ClientVersion,
                 frame.Provider.Fault,
                 frame.Provider.IsTruncated,
+                frame.Provider.AttachmentProcessId,
             },
             Knownness = new
             {
@@ -594,6 +605,8 @@ public static class DashboardEndpoints
                 {
                     OutputMode = coordinator.Mode.ToString(),
                     PendingAction = coordinator.PendingAction,
+                    InputSink = coordinator.InputSink,
+                    LiveBlockers = coordinator.GetLiveBlockers(),
                     HistoryCount = coordinator.RecentHistory.Count,
                     RecentHistory = coordinator.RecentHistory.TakeLast(10).Select(r => new
                     {
@@ -647,16 +660,21 @@ public static class DashboardEndpoints
 
     private static IResult GetReadiness(
         [FromServices] ArmingReadinessService readiness,
+        [FromServices] ActionCoordinator coordinator,
         [FromServices] IConfiguration configuration)
     {
         TimeSpan maxAge = TimeSpan.FromMilliseconds(
             configuration.GetValue<int>("BotDs:Evaluator:MaximumTelemetryAgeMs", 5000));
-        ReadinessResult result = readiness.Evaluate(maxAge);
+        bool inputReadyRequired = coordinator.Mode == OutputMode.Live;
+        ReadinessResult result = readiness.Evaluate(maxAge, inputReadyRequired);
         return Results.Json(new
         {
             result.CanArm,
             result.Blockers,
             Warnings = result.Warnings.Select(w => w.Message).ToList(),
+            InputReadyRequired = inputReadyRequired,
+            InputSink = coordinator.InputSink,
+            LiveBlockers = coordinator.GetLiveBlockers(),
             ProfileId = result.Profile?.Id,
             PlayerLevel = result.Frame?.Player?.Level,
             PlayerCalling = result.Frame?.Player?.Calling,
@@ -686,7 +704,14 @@ public static class DashboardEndpoints
             TimeSpan maxAge = TimeSpan.FromMilliseconds(
                 configuration.GetValue<int>("BotDs:Evaluator:MaximumTelemetryAgeMs", 5000));
             if (!coordinator.TrySetMode(mode, maxAge))
-                return Results.BadRequest(new { Error = "Failed to set output mode. Check readiness." });
+            {
+                return Results.BadRequest(new
+                {
+                    Error = "Failed to set output mode. Check readiness and Live blockers.",
+                    InputSink = coordinator.InputSink,
+                    LiveBlockers = coordinator.GetLiveBlockers(),
+                });
+            }
 
             log.LogInformation("Output mode set to {Mode} via dashboard", mode);
             return Results.Ok(new { OutputMode = mode.ToString() });

@@ -29,6 +29,11 @@ public sealed record DispatchRecord(
     DispatchOutcome Outcome,
     string? Detail = null);
 
+public sealed record InputSinkStatus(
+    bool SupportsLiveInput,
+    bool IsReady,
+    int BoundProcessId);
+
 public enum DispatchOutcome
 {
     /// <summary>Action dispatched successfully (dry-run: logged).</summary>
@@ -73,6 +78,7 @@ public sealed class ActionCoordinator
     private readonly bool _requireEmergencyHotkeyForLive;
     private readonly bool _detectExternalActionConflicts;
     private readonly string _emergencyHotkeyBinding;
+    private TimeSpan _maximumTelemetryAge;
     private readonly SnapshotPublisher _publisher;
     private readonly ControllerStateMachine _stateMachine;
     private readonly ProfileService _profiles;
@@ -137,6 +143,8 @@ public sealed class ActionCoordinator
             "BotDs:Action:RequireEmergencyHotkeyForLive", true);
         _detectExternalActionConflicts = configuration.GetValue(
             "BotDs:Action:DetectExternalActionConflicts", true);
+        _maximumTelemetryAge = TimeSpan.FromMilliseconds(
+            configuration.GetValue<int>("BotDs:Evaluator:MaximumTelemetryAgeMs", 5000));
     }
 
     public OutputMode Mode
@@ -157,6 +165,19 @@ public sealed class ActionCoordinator
     public BindingVerificationTracker Bindings => _bindings;
 
     public IEmergencyHotkey EmergencyHotkey => _emergencyHotkey;
+
+    public InputSinkStatus InputSink => new(
+        _keySink.SupportsLiveInput,
+        _keySink.IsReady,
+        _keySink.BoundPid);
+
+    public IReadOnlyList<string> GetLiveBlockers()
+    {
+        lock (_lock)
+        {
+            return BuildLiveModeBlockersLocked(_profiles.ActiveProfile, _publisher.Latest);
+        }
+    }
 
     /// <summary>
     /// Attempt to set output mode. Non-Disabled modes require readiness.
@@ -184,7 +205,9 @@ public sealed class ActionCoordinator
                 return false;
             }
 
-            ReadinessResult ready = _readiness.Evaluate(maxTelemetryAge);
+            ReadinessResult ready = _readiness.Evaluate(
+                maxTelemetryAge,
+                requireGameInputReady: mode == OutputMode.Live);
             if (!ready.CanArm)
             {
                 _log.LogWarning("Readiness check failed for mode {Mode}: {Blockers}",
@@ -192,39 +215,21 @@ public sealed class ActionCoordinator
                 return false;
             }
 
-            AlignBindingsLocked(ready.Profile, ready.Frame);
-
-            if (ready.Profile is not null
-                && ProfileCollidesWithEmergencyHotkey(ready.Profile, _emergencyHotkey.Binding))
+            if (mode == OutputMode.Live)
             {
-                _log.LogWarning(
-                    "Output mode {Mode} blocked: profile binding collides with emergency hotkey {Hotkey}",
-                    mode, _emergencyHotkey.Binding);
-                return false;
-            }
-
-            if (mode == OutputMode.Live && _requireBindingVerificationForLive && ready.Profile is not null)
-            {
-                IReadOnlyList<string> bindingBlockers = _bindings.GetLiveBlockers(
-                    ready.Profile, ready.Frame?.Player?.Level);
-                if (bindingBlockers.Count > 0)
+                AlignBindingsLocked(ready.Profile, ready.Frame);
+                IReadOnlyList<string> liveBlockers = BuildLiveModeBlockersLocked(ready.Profile, ready.Frame);
+                if (liveBlockers.Count > 0)
                 {
-                    _log.LogWarning("Live mode blocked by binding verification: {Blockers}",
-                        string.Join("; ", bindingBlockers));
+                    _log.LogWarning("Live mode blocked: {Blockers}", string.Join("; ", liveBlockers));
                     return false;
                 }
             }
 
-            if (mode == OutputMode.Live && _requireEmergencyHotkeyForLive && !_emergencyHotkey.IsRegistered)
-            {
-                _log.LogWarning(
-                    "Live mode blocked: emergency hotkey '{Hotkey}' is not registered ({Error})",
-                    _emergencyHotkey.Binding, _emergencyHotkey.LastError ?? "not registered");
-                return false;
-            }
-
+            _maximumTelemetryAge = maxTelemetryAge;
             _outputMode = mode;
-            _previousFrame = ready.Frame;
+            _previousFrame = mode == OutputMode.Live ? ready.Frame : null;
+            CancelPendingLocked("Output mode changed");
             _log.LogInformation("Output mode set to {Mode}", mode);
             return true;
         }
@@ -253,6 +258,12 @@ public sealed class ActionCoordinator
 
         lock (_lock)
         {
+            if (_outputMode != OutputMode.Live)
+            {
+                _previousFrame = null;
+                return null;
+            }
+
             AlignBindingsLocked(_profiles.ActiveProfile, frame);
 
             var state = _stateMachine.State;
@@ -295,7 +306,8 @@ public sealed class ActionCoordinator
             if (match == AcknowledgementMatch.Matched)
             {
                 ActionDecision action = _pendingAction;
-                _bindings.MarkVerified(action.AbilityAlias);
+                if (IsSupportedLiveAcknowledgement(action.Acknowledgement))
+                    _bindings.MarkVerified(action.AbilityAlias);
                 DispatchRecord record = RecordAndReturnLocked(
                     action, DispatchOutcome.Acknowledged,
                     $"ack={action.Acknowledgement}; seq={frame.Provider.Sequence}");
@@ -383,7 +395,7 @@ public sealed class ActionCoordinator
                 if (_outputMode == OutputMode.Disabled)
                     return RecordAndReturnLocked(action, DispatchOutcome.NotArmed, "Output disabled");
 
-                if (_pendingAction is not null)
+                if (_outputMode == OutputMode.Live && _pendingAction is not null)
                 {
                     TimeSpan elapsed = now - _pendingActionDispatchedUtc;
                     if (elapsed > _ackTimeout)
@@ -400,7 +412,6 @@ public sealed class ActionCoordinator
                             DisableUnlocked();
                             return timeout;
                         }
-                        // DryRun: fall through to try the new action
                     }
                     else
                     {
@@ -444,48 +455,55 @@ public sealed class ActionCoordinator
                         $"Controller state is {state}");
                 }
 
-                TelemetryFrame frame = _publisher.Latest;
-                AlignBindingsLocked(_profiles.ActiveProfile, frame);
-
                 if (_outputMode == OutputMode.DryRun)
                 {
-                    bool dispatched = _keySink.DispatchKey(action.Key, CancellationToken.None);
-                    if (!dispatched)
-                    {
-                        return RecordAndReturnLocked(action, DispatchOutcome.RevalidationFailed,
-                            $"Key sink rejected '{action.Key}' in dry-run");
-                    }
+                    _lastDispatchUtc = now;
+                    _perKeyLastDispatch[action.Key] = now;
                     _log.LogInformation(
                         "[DRY-RUN] Action: Rule={RuleId}, Ability={AbilityId}, Key={Key}, Ack={Ack}, Seq={Seq}",
                         action.RuleId, action.AbilityId, action.Key, action.Acknowledgement, action.FrameSequence);
+                    return RecordAndReturnLocked(action, DispatchOutcome.Dispatched, "dry-run");
                 }
-                else if (_outputMode == OutputMode.Live)
+
+                TelemetryFrame frame = _publisher.Latest;
+                if (!TryValidateLiveDispatchLocked(
+                    action,
+                    frame,
+                    out ActionDecision? currentAction,
+                    out string validationDetail,
+                    out StopReason fatalStopReason))
                 {
-                    if (!_keySink.IsReady)
+                    if (fatalStopReason != StopReason.None)
                     {
-                        return RecordAndReturnLocked(action, DispatchOutcome.RevalidationFailed, "Key sink not ready");
+                        _stateMachine.Stop(fatalStopReason, validationDetail);
+                        DisableUnlocked();
                     }
-                    bool dispatched = _keySink.DispatchKey(action.Key, CancellationToken.None);
-                    if (!dispatched)
-                    {
-                        _keySink.LatchFault($"Key dispatch failed for '{action.Key}'");
-                        _stateMachine.Disarm();
-                        return RecordAndReturnLocked(action, DispatchOutcome.RevalidationFailed, "Key sink rejected dispatch — disarmed");
-                    }
-                    _log.LogInformation(
-                        "[LIVE] Key dispatched: {Key} for {AbilityId}",
-                        action.Key, action.AbilityId);
+
+                    return RecordAndReturnLocked(action, DispatchOutcome.RevalidationFailed, validationDetail);
                 }
+
+                bool dispatched = _keySink.DispatchKey(currentAction!.Key, CancellationToken.None);
+                if (!dispatched)
+                {
+                    string detail = $"Key sink rejected dispatch for '{currentAction.Key}'";
+                    _keySink.LatchFault(detail);
+                    _stateMachine.Stop(StopReason.IntegrityFailure, detail);
+                    DisableUnlocked();
+                    return RecordAndReturnLocked(currentAction, DispatchOutcome.RevalidationFailed,
+                        $"{detail}; controller stopped and output disabled");
+                }
+                _log.LogInformation(
+                    "[LIVE] Key dispatched: {Key} for {AbilityId}",
+                    currentAction.Key, currentAction.AbilityId);
 
                 _lastDispatchUtc = now;
-                _perKeyLastDispatch[action.Key] = now;
-                _pendingAction = action;
+                _perKeyLastDispatch[currentAction.Key] = now;
+                _pendingAction = currentAction;
                 _pendingActionDispatchedUtc = now;
-                _pendingBaseline = ActionAcknowledgementMatcher.CaptureBaseline(action, frame, now);
+                _pendingBaseline = ActionAcknowledgementMatcher.CaptureBaseline(currentAction, frame, now);
 
                 return RecordAndReturnLocked(
-                    action, DispatchOutcome.Dispatched,
-                    _outputMode == OutputMode.DryRun ? "dry-run" : "live");
+                    currentAction, DispatchOutcome.Dispatched, "live");
             }
         }
         finally
@@ -531,10 +549,226 @@ public sealed class ActionCoordinator
 
     private void DisableUnlocked()
     {
+        CancelPendingLocked("Output forced disabled");
         _outputMode = OutputMode.Disabled;
         _perKeyLastDispatch.Clear();
         _previousFrame = null;
         _log.LogInformation("Output mode forced to Disabled");
+    }
+
+    private bool TryValidateLiveDispatchLocked(
+        ActionDecision action,
+        TelemetryFrame frame,
+        out ActionDecision? currentAction,
+        out string detail,
+        out StopReason fatalStopReason)
+    {
+        currentAction = null;
+        fatalStopReason = StopReason.None;
+
+        if (_outputMode != OutputMode.Live)
+        {
+            detail = "Output mode changed before dispatch";
+            return false;
+        }
+
+        ProviderStatus provider = frame.Provider;
+        if (!provider.IsUsable(_maximumTelemetryAge, _time.GetUtcNow()))
+        {
+            detail = $"Latest telemetry is not healthy and fresh (health={provider.Health}, age={provider.Age.TotalMilliseconds:F0}ms)";
+            fatalStopReason = StopReason.TelemetryStale;
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(action.ProviderSessionId)
+            || string.IsNullOrWhiteSpace(provider.SessionId)
+            || !string.Equals(action.ProviderSessionId, provider.SessionId, StringComparison.Ordinal))
+        {
+            detail = "Provider session identity changed before dispatch";
+            fatalStopReason = StopReason.IntegrityFailure;
+            return false;
+        }
+
+        if (action.SourceGeneration != provider.SourceGeneration)
+        {
+            detail = "Telemetry source generation changed before dispatch";
+            fatalStopReason = StopReason.IntegrityFailure;
+            return false;
+        }
+
+        if (action.AttachmentProcessId is not > 0
+            || provider.AttachmentProcessId is not > 0
+            || action.AttachmentProcessId != provider.AttachmentProcessId)
+        {
+            detail = "RIFT attachment process identity changed before dispatch";
+            fatalStopReason = StopReason.ProcessExited;
+            return false;
+        }
+
+        if (!IsSameOrNewerSequence(provider.Sequence, action.FrameSequence))
+        {
+            detail = $"Latest telemetry sequence {provider.Sequence} is older or ambiguously ordered relative to decision sequence {action.FrameSequence}";
+            fatalStopReason = StopReason.SequenceDiscontinuity;
+            return false;
+        }
+
+        if (!_keySink.SupportsLiveInput || !_keySink.IsReady || _keySink.BoundPid <= 0
+            || _keySink.BoundPid != provider.AttachmentProcessId)
+        {
+            detail = $"Live input sink is unavailable or bound to the wrong process (supportsLive={_keySink.SupportsLiveInput}, ready={_keySink.IsReady}, boundPid={_keySink.BoundPid}, telemetryPid={provider.AttachmentProcessId?.ToString() ?? "unknown"})";
+            fatalStopReason = StopReason.IntegrityFailure;
+            return false;
+        }
+
+        if (frame.GameInputReady != true)
+        {
+            detail = frame.GameInputReady is null
+                ? "Game input readiness became unknown before dispatch"
+                : "Game input became blocked before dispatch";
+            return false;
+        }
+
+        UnitState? player = frame.Player;
+        if (player is null || !player.IsAvailable || player.Health.IsDead)
+        {
+            detail = "Player is unavailable or dead in the latest telemetry";
+            return false;
+        }
+
+        UnitState? target = frame.Target;
+        if (target is null || !target.IsAvailable || target.Health.IsDead || !target.IsHostile)
+        {
+            detail = "Target is unavailable, dead, or non-hostile in the latest telemetry";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(action.TargetId)
+            || !string.Equals(action.TargetId, target.Id, StringComparison.Ordinal))
+        {
+            detail = "Selected target changed before dispatch";
+            return false;
+        }
+
+        if (!IsSupportedLiveAcknowledgement(action.Acknowledgement))
+        {
+            detail = $"Acknowledgement kind '{action.Acknowledgement}' is unsupported in Live mode";
+            fatalStopReason = StopReason.IntegrityFailure;
+            return false;
+        }
+
+        if (!frame.IsAbilitiesKnown
+            || !frame.Abilities.TryGetValue(action.AbilityId, out AbilityState? ability)
+            || ability is null
+            || !ability.Available
+            || !ability.IsReady
+            || ability.Usable != true
+            || ability.InRange != true)
+        {
+            detail = $"Ability '{action.AbilityId}' is no longer known ready, usable, and in range";
+            return false;
+        }
+
+        CombatProfile? profile = _profiles.ActiveProfile;
+        if (profile is null || !profile.Enabled)
+        {
+            detail = "Active combat profile is unavailable or disabled";
+            fatalStopReason = StopReason.ProfileMismatch;
+            return false;
+        }
+
+        if (_requireBindingVerificationForLive)
+        {
+            IReadOnlyList<string> bindingBlockers = _bindings.GetLiveBlockers(profile, player.Level);
+            if (bindingBlockers.Count > 0)
+            {
+                detail = $"Binding verification changed before dispatch: {string.Join("; ", bindingBlockers)}";
+                fatalStopReason = StopReason.IntegrityFailure;
+                return false;
+            }
+        }
+
+        var evaluator = new CombatEvaluator(_maximumTelemetryAge, _time);
+        EvaluationResult current = evaluator.Evaluate(profile, frame);
+        if (current.Action is null)
+        {
+            detail = current.Message ?? "No combat action currently wins evaluation";
+            return false;
+        }
+
+        currentAction = current.Action;
+        if (!SameAction(action, currentAction))
+        {
+            detail = "The current winning combat decision changed before dispatch";
+            currentAction = null;
+            return false;
+        }
+
+        detail = "Live dispatch fence passed";
+        return true;
+    }
+
+    private IReadOnlyList<string> BuildLiveModeBlockersLocked(CombatProfile? profile, TelemetryFrame? frame)
+    {
+        var blockers = new List<string>();
+
+        if (!_keySink.SupportsLiveInput)
+            blockers.Add("Configured input sink does not support Live input.");
+        if (!_keySink.IsReady)
+            blockers.Add("Configured input sink is not ready.");
+        if (_keySink.BoundPid <= 0)
+            blockers.Add("Configured input sink has no positive bound process id.");
+
+        int? attachmentPid = frame?.Provider.AttachmentProcessId;
+        if (attachmentPid is not > 0)
+            blockers.Add("Telemetry does not identify the attached RIFT process.");
+        else if (_keySink.BoundPid > 0 && _keySink.BoundPid != attachmentPid)
+            blockers.Add($"Input sink PID {_keySink.BoundPid} does not match telemetry attachment PID {attachmentPid}.");
+
+        if (frame?.GameInputReady is null)
+            blockers.Add("Game input readiness is unknown.");
+        else if (frame.GameInputReady is false)
+            blockers.Add("Game input is currently blocked.");
+
+        if (profile is not null)
+        {
+            if (ProfileCollidesWithEmergencyHotkey(profile, _emergencyHotkey.Binding))
+                blockers.Add($"A profile binding collides with emergency hotkey '{_emergencyHotkey.Binding}'.");
+
+            foreach (CombatRule rule in profile.Rules.Where(r => r is { Enabled: true }))
+            {
+                if (!IsSupportedLiveAcknowledgement(rule.Acknowledgement))
+                    blockers.Add($"Rule '{rule.Id}' uses unsupported Live acknowledgement '{rule.Acknowledgement}'.");
+            }
+
+            if (_requireBindingVerificationForLive)
+                blockers.AddRange(_bindings.GetLiveBlockers(profile, frame?.Player?.Level));
+        }
+
+        if (_requireEmergencyHotkeyForLive && !_emergencyHotkey.IsRegistered)
+        {
+            blockers.Add($"Emergency hotkey '{_emergencyHotkey.Binding}' is not registered ({_emergencyHotkey.LastError ?? "not registered"}).");
+        }
+
+        return blockers;
+    }
+
+    private static bool IsSupportedLiveAcknowledgement(AcknowledgementKind acknowledgement) =>
+        acknowledgement is AcknowledgementKind.Cast or AcknowledgementKind.Cooldown;
+
+    private static bool SameAction(ActionDecision expected, ActionDecision current) =>
+        string.Equals(expected.RuleId, current.RuleId, StringComparison.Ordinal)
+        && string.Equals(expected.AbilityAlias, current.AbilityAlias, StringComparison.Ordinal)
+        && string.Equals(expected.AbilityId, current.AbilityId, StringComparison.Ordinal)
+        && string.Equals(expected.Key, current.Key, StringComparison.OrdinalIgnoreCase)
+        && expected.Acknowledgement == current.Acknowledgement;
+
+    private static bool IsSameOrNewerSequence(ulong current, ulong baseline)
+    {
+        if (current > uint.MaxValue || baseline > uint.MaxValue)
+            return current >= baseline;
+
+        uint difference = unchecked((uint)current - (uint)baseline);
+        return difference == 0 || difference < 0x80000000u;
     }
 
     private static bool ProfileCollidesWithEmergencyHotkey(CombatProfile profile, string emergencyHotkey)

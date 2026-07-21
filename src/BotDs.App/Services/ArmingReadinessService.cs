@@ -26,7 +26,7 @@ public sealed class ArmingReadinessService
     /// Evaluates all pre-arm conditions. Returns a result with a boolean
     /// <c>CanArm</c> flag and a list of human-readable blockers.
     /// </summary>
-    public ReadinessResult Evaluate(TimeSpan maxTelemetryAge)
+    public ReadinessResult Evaluate(TimeSpan maxTelemetryAge, bool requireGameInputReady = false)
     {
         var blockers = new List<string>();
         var warnings = new List<ArmingWarning>();
@@ -147,10 +147,21 @@ public sealed class ArmingReadinessService
         }
 
         // ── Game input readiness (M2) ───────────────────────
-        if (frame.GameInputReady is false)
-            blockers.Add("Game input is not ready (chat/edit focus or blocked UI context).");
+        if (requireGameInputReady)
+        {
+            if (frame.GameInputReady is false)
+                blockers.Add("Game input is not ready (chat/edit focus or blocked UI context).");
+            else if (frame.GameInputReady is null)
+                blockers.Add("Game input readiness is unknown; Live requires a supported successful focus probe.");
+        }
+        else if (frame.GameInputReady is false)
+        {
+            warnings.Add(new ArmingWarning("Game input is currently blocked; DryRun remains observational."));
+        }
         else if (frame.GameInputReady is null)
-            warnings.Add(new ArmingWarning("Game input readiness is unknown."));
+        {
+            warnings.Add(new ArmingWarning("Game input readiness is unknown; DryRun remains observational."));
+        }
 
         // ── Ability inventory checks ────────────────────────
         if (!frame.IsAbilitiesKnown)

@@ -8,7 +8,11 @@ public sealed record ActionDecision(
     string AbilityId,
     string Key,
     AcknowledgementKind Acknowledgement,
-    ulong FrameSequence);
+    ulong FrameSequence,
+    string? ProviderSessionId = null,
+    long SourceGeneration = 0,
+    string? TargetId = null,
+    int? AttachmentProcessId = null);
 
 public sealed record EvaluationResult(
     ControllerState State,
@@ -149,7 +153,11 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge, TimeProvider? 
                     binding.AbilityId,
                     binding.Key,
                     rule.Acknowledgement,
-                    frame.Provider.Sequence),
+                    frame.Provider.Sequence,
+                    frame.Provider.SessionId,
+                    frame.Provider.SourceGeneration,
+                    target.Id,
+                    frame.Provider.AttachmentProcessId),
                 rejections);
         }
 

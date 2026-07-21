@@ -51,13 +51,16 @@ public sealed class WindowsForegroundProvider : IForegroundProvider
 /// Abstracts the low-level keyboard injection so WindowsKeySink
 /// can be tested without calling real SendInput.
 /// </summary>
+public readonly record struct InputInjectionResult(int SentCount, int? NativeErrorCode = null);
+
 public interface IInputInjector
 {
     /// <summary>
     /// Inject a batch of keyboard INPUT structures into the system.
-    /// Returns true if all events were successfully injected.
+    /// Returns the exact number of events injected and any native error reported
+    /// when the batch was incomplete.
     /// </summary>
-    bool Inject(WindowsKeySink.INPUT[] inputs, int count);
+    InputInjectionResult Inject(WindowsKeySink.INPUT[] inputs, int count);
 }
 
 /// <summary>
@@ -65,14 +68,15 @@ public interface IInputInjector
 /// </summary>
 public sealed class WindowsInputInjector : IInputInjector
 {
-    public bool Inject(WindowsKeySink.INPUT[] inputs, int count)
+    public InputInjectionResult Inject(WindowsKeySink.INPUT[] inputs, int count)
     {
-        if (count == 0) return true;
+        if (count == 0) return new InputInjectionResult(0);
         uint sent = NativeInput.SendInput(
             (uint)count,
             ref inputs[0],
             Marshal.SizeOf<WindowsKeySink.INPUT>());
-        return sent == count;
+        int? nativeError = sent == count ? null : Marshal.GetLastWin32Error();
+        return new InputInjectionResult(checked((int)sent), nativeError);
     }
 }
 
@@ -98,6 +102,7 @@ public sealed class WindowsKeySink : IKeySink, IDisposable
     private readonly int _chordPressMs;
 
     public bool IsReady => !_faulted && !_disposed;
+    public bool SupportsLiveInput => true;
     public int BoundPid => _boundPid;
 
     /// <summary>
@@ -161,21 +166,10 @@ public sealed class WindowsKeySink : IKeySink, IDisposable
             if (_fg.IsKeyHeld(vk.Value))
                 return false;
 
-            // Check modifier keys aren't physically held (they should come from SendInput, not the user)
-        if (modifiers.Count == 0)
-        {
-            // No modifiers requested — reject if any modifier is held (user finger on shift/ctrl/alt)
+            // Reject every physical modifier, including modifiers requested by the
+            // binding. Bot-owned key-up events must never interfere with user-held keys.
             if (_fg.IsKeyHeld(VK_SHIFT) || _fg.IsKeyHeld(VK_CONTROL) || _fg.IsKeyHeld(VK_MENU))
                 return false;
-        }
-        else
-        {
-            // Binding uses modifiers — reject if any of the binding's own modifiers are physically held
-            // (would cause sticky modifier when the bot releases but the user doesn't)
-            if (modifiers.Contains("Shift") && _fg.IsKeyHeld(VK_SHIFT)) return false;
-            if (modifiers.Contains("Ctrl") && _fg.IsKeyHeld(VK_CONTROL)) return false;
-            if (modifiers.Contains("Alt") && _fg.IsKeyHeld(VK_MENU)) return false;
-        }
 
             // ── Send chord ────────────────────────────────────
             if (!SendKeyChord(vk.Value, modifiers, ct))
@@ -210,8 +204,14 @@ public sealed class WindowsKeySink : IKeySink, IDisposable
         if (hasAlt) downInputs[downCount++] = MakeKeyInput(VK_MENU, KeyDown);
         downInputs[downCount++] = MakeKeyInput(vk, KeyDown);
 
-        if (!_injector.Inject(downInputs[..downCount].ToArray(), downCount))
+        INPUT[] cleanupInputs = BuildReleaseBatch(vk, hasShift, hasCtrl, hasAlt);
+
+        InputInjectionResult downResult = _injector.Inject(downInputs[..downCount].ToArray(), downCount);
+        if (downResult.SentCount != downCount)
+        {
+            _ = _injector.Inject(cleanupInputs, cleanupInputs.Length);
             return false;
+        }
 
         // ── Delay between press and release ──────────────────
         if (_chordPressMs > 0 && !ct.IsCancellationRequested)
@@ -223,29 +223,29 @@ public sealed class WindowsKeySink : IKeySink, IDisposable
 
         if (ct.IsCancellationRequested)
         {
-            // Best-effort: release the key even after cancellation
-            Span<INPUT> upCleanup = stackalloc INPUT[4];
-            int upC = 0;
-            upCleanup[upC++] = MakeKeyInput(vk, KeyUp);
-            if (hasAlt) upCleanup[upC++] = MakeKeyInput(VK_MENU, KeyUp);
-            if (hasCtrl) upCleanup[upC++] = MakeKeyInput(VK_CONTROL, KeyUp);
-            if (hasShift) upCleanup[upC++] = MakeKeyInput(VK_SHIFT, KeyUp);
-            _injector.Inject(upCleanup[..upC].ToArray(), upC);
+            _ = _injector.Inject(cleanupInputs, cleanupInputs.Length);
             return false;
         }
 
-        // ── Build up events (key first, then modifiers reversed) ──
-        Span<INPUT> upInputs = stackalloc INPUT[4]; // 1 key + up to 3 modifiers
+        InputInjectionResult upResult = _injector.Inject(cleanupInputs, cleanupInputs.Length);
+        if (upResult.SentCount != cleanupInputs.Length)
+        {
+            _ = _injector.Inject(cleanupInputs, cleanupInputs.Length);
+            return false;
+        }
+
+        return true;
+    }
+
+    private static INPUT[] BuildReleaseBatch(ushort vk, bool hasShift, bool hasCtrl, bool hasAlt)
+    {
+        Span<INPUT> upInputs = stackalloc INPUT[4];
         int upCount = 0;
         upInputs[upCount++] = MakeKeyInput(vk, KeyUp);
         if (hasAlt) upInputs[upCount++] = MakeKeyInput(VK_MENU, KeyUp);
         if (hasCtrl) upInputs[upCount++] = MakeKeyInput(VK_CONTROL, KeyUp);
         if (hasShift) upInputs[upCount++] = MakeKeyInput(VK_SHIFT, KeyUp);
-
-        if (!_injector.Inject(upInputs[..upCount].ToArray(), upCount))
-            return false;
-
-        return true;
+        return upInputs[..upCount].ToArray();
     }
 
     // ── INPUT helpers ─────────────────────────────────────────

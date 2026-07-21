@@ -8,6 +8,12 @@ namespace BotDs.Input;
 public interface IKeySink
 {
     /// <summary>
+    /// True only when this sink can inject real input into the bound game process.
+    /// Observational/test sinks must return false.
+    /// </summary>
+    bool SupportsLiveInput { get; }
+
+    /// <summary>
     /// Dispatch a single key chord (key-down followed by key-up).
     /// Preconditions: foreground window must belong to the captured process,
     /// no chord keys should be physically held, and the sink must not be
@@ -87,6 +93,7 @@ public sealed class FakeKeySink : IKeySink
     private readonly object _lock = new();
     private readonly List<FakeDispatchRecord> _history = [];
 
+    public bool SupportsLiveInput => false;
     public bool IsReady => !_faulted;
     public int BoundPid => 0;
 

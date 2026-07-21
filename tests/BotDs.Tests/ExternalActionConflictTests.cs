@@ -71,11 +71,11 @@ public sealed class ExternalActionConflictTests : IDisposable
         Assert.True(hotkey.TryRegister(static () => { }));
         var coord = new ActionCoordinator(
             pub, sm, profiles, readiness, config,
-            keySink: new FakeKeySink(),
+            keySink: new TestLiveKeySink(),
             timeProvider: time,
             emergencyHotkey: hotkey);
 
-        Assert.True(coord.TrySetMode(OutputMode.DryRun, TimeSpan.FromMilliseconds(500)));
+        Assert.True(coord.TrySetMode(OutputMode.Live, TimeSpan.FromMilliseconds(500)));
         sm.Arm();
 
         // Seed previous frame via an empty observe
@@ -175,7 +175,7 @@ public sealed class ExternalActionConflictTests : IDisposable
         return new TelemetryFrame(
             Provider: new ProviderStatus(
                 ProviderHealth.Healthy, "5", session ?? "s1", seq, 16, t,
-                TimeSpan.FromMilliseconds(5), SourceGeneration: 1),
+                TimeSpan.FromMilliseconds(5), SourceGeneration: 1, AttachmentProcessId: 4242),
             Player: new UnitState(
                 "p1", "Test", 45, "Warrior", true, "friendly",
                 new HealthState(100, 100), new ResourceState("Power", 50, 100), true, null),
@@ -194,7 +194,9 @@ public sealed class ExternalActionConflictTests : IDisposable
             TargetAuras: [],
             IsAbilitiesKnown: true,
             IsPlayerAurasKnown: true,
-            IsTargetAurasKnown: true);
+            IsTargetAurasKnown: true,
+            TargetKnownness: TargetKnownness.KnownTarget,
+            GameInputReady: true);
     }
 
     private sealed class HostEnv(string root) : IHostEnvironment

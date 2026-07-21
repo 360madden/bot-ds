@@ -61,7 +61,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
     }
 
     [Fact]
-    public async Task Profile_key_colliding_with_emergency_hotkey_blocks_DryRun_and_Live()
+    public async Task Profile_key_colliding_with_emergency_hotkey_blocks_Live_but_not_DryRun()
     {
         var hotkey = new FakeEmergencyHotkey("Ctrl+Shift+F12");
         Assert.True(hotkey.TryRegister(static () => { }));
@@ -69,7 +69,8 @@ public sealed class M8ClosedLoopGateTests : IDisposable
             hotkey: hotkey,
             abilityKey: "Ctrl+Shift+F12");
 
-        Assert.False(coord.TrySetMode(OutputMode.DryRun, MaxAge));
+        Assert.True(coord.TrySetMode(OutputMode.DryRun, MaxAge));
+        Assert.True(coord.Disable());
         Assert.False(coord.TrySetMode(OutputMode.Live, MaxAge));
         Assert.Equal(OutputMode.Disabled, coord.Mode);
     }
@@ -77,7 +78,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
     [Fact]
     public async Task Unrelated_ability_cooldown_does_not_acknowledge_pending_action()
     {
-        var (coord, _, pub, _, sm) = await CreateReadyDryRun();
+        var (coord, _, pub, _, sm) = await CreateReadyLive();
         sm.Arm();
 
         TelemetryFrame pre = Frame(seq: 20, cooldownMs: 0, otherCooldownMs: 0);
@@ -85,7 +86,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
         var dispatch = coord.Consume(
             new EvaluationResult(
                 ControllerState.Armed,
-                new ActionDecision("r1", "slice", "1001", "1", AcknowledgementKind.Cooldown, 20),
+                Decision(20),
                 []),
             sm.Generation);
         Assert.Equal(DispatchOutcome.Dispatched, dispatch!.Outcome);
@@ -106,7 +107,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
     [Fact]
     public async Task Matching_cooldown_acknowledges_and_clears_pending()
     {
-        var (coord, _, pub, _, sm) = await CreateReadyDryRun();
+        var (coord, _, pub, _, sm) = await CreateReadyLive();
         sm.Arm();
 
         TelemetryFrame pre = Frame(seq: 30, cooldownMs: 0);
@@ -116,7 +117,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
             coord.Consume(
                 new EvaluationResult(
                     ControllerState.Armed,
-                    new ActionDecision("r1", "slice", "1001", "1", AcknowledgementKind.Cooldown, 30),
+                    Decision(30),
                     []),
                 sm.Generation)!.Outcome);
 
@@ -132,7 +133,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
     [Fact]
     public async Task Target_identity_change_invalidates_pending_action()
     {
-        var (coord, _, pub, _, sm) = await CreateReadyDryRun();
+        var (coord, _, pub, _, sm) = await CreateReadyLive();
         sm.Arm();
 
         TelemetryFrame pre = Frame(seq: 40, cooldownMs: 0, targetId: "mob-a");
@@ -142,7 +143,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
             coord.Consume(
                 new EvaluationResult(
                     ControllerState.Armed,
-                    new ActionDecision("r1", "slice", "1001", "1", AcknowledgementKind.Cooldown, 40),
+                    Decision(40, targetId: "mob-a"),
                     []),
                 sm.Generation)!.Outcome);
 
@@ -161,17 +162,17 @@ public sealed class M8ClosedLoopGateTests : IDisposable
     [Fact]
     public async Task Provider_session_change_invalidates_pending_action()
     {
-        var (coord, _, pub, _, sm) = await CreateReadyDryRun();
+        var (coord, _, pub, _, sm) = await CreateReadyLive();
         sm.Arm();
 
-        TelemetryFrame pre = Frame(seq: 50, cooldownMs: 0, session: "session-a");
+        TelemetryFrame pre = Frame(seq: 50, cooldownMs: 0, session: "session-1");
         pub.Publish(pre);
         Assert.Equal(
             DispatchOutcome.Dispatched,
             coord.Consume(
                 new EvaluationResult(
                     ControllerState.Armed,
-                    new ActionDecision("r1", "slice", "1001", "1", AcknowledgementKind.Cooldown, 50),
+                    Decision(50),
                     []),
                 sm.Generation)!.Outcome);
 
@@ -186,14 +187,14 @@ public sealed class M8ClosedLoopGateTests : IDisposable
     [Fact]
     public async Task Pending_action_blocks_second_combat_key_dispatch()
     {
-        var (coord, _, pub, _, sm) = await CreateReadyDryRun();
+        var (coord, _, pub, _, sm) = await CreateReadyLive();
         sm.Arm();
         pub.Publish(Frame(seq: 60, cooldownMs: 0));
 
         var first = coord.Consume(
             new EvaluationResult(
                 ControllerState.Armed,
-                new ActionDecision("r1", "slice", "1001", "1", AcknowledgementKind.Cooldown, 60),
+                Decision(60),
                 []),
             sm.Generation);
         Assert.Equal(DispatchOutcome.Dispatched, first!.Outcome);
@@ -201,7 +202,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
         var second = coord.Consume(
             new EvaluationResult(
                 ControllerState.Armed,
-                new ActionDecision("r1", "slice", "1001", "2", AcknowledgementKind.Cooldown, 61),
+                Decision(61, key: "2"),
                 []),
             sm.Generation);
         Assert.Equal(DispatchOutcome.PendingActionBlocked, second!.Outcome);
@@ -222,7 +223,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
             coord.Consume(
                 new EvaluationResult(
                     ControllerState.Armed,
-                    new ActionDecision("r1", "slice", "1001", "1", AcknowledgementKind.Cooldown, 70),
+                    Decision(70),
                     []),
                 sm.Generation)!.Outcome);
         Assert.NotNull(coord.PendingAction);
@@ -251,12 +252,13 @@ public sealed class M8ClosedLoopGateTests : IDisposable
     // ── Pipeline helpers ─────────────────────────────────────
 
     private async Task<(ActionCoordinator, ProfileService, SnapshotPublisher, ArmingReadinessService, ControllerStateMachine)>
-        CreateReadyDryRun()
+        CreateReadyLive()
     {
         var hotkey = new FakeEmergencyHotkey("Ctrl+Shift+F12");
         Assert.True(hotkey.TryRegister(static () => { }));
         var pipeline = await CreatePipeline(hotkey: hotkey, requireHotkey: false);
-        Assert.True(pipeline.Item1.TrySetMode(OutputMode.DryRun, MaxAge));
+        pipeline.Item1.Bindings.MarkVerified("slice");
+        Assert.True(pipeline.Item1.TrySetMode(OutputMode.Live, MaxAge));
         return pipeline;
     }
 
@@ -290,7 +292,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
         IEmergencyHotkey key = hotkey ?? CreateRegisteredFake();
         var coord = new ActionCoordinator(
             pub, sm, profiles, readiness, config,
-            keySink: new FakeKeySink(),
+            keySink: new TestLiveKeySink(),
             timeProvider: time,
             emergencyHotkey: key);
         return (coord, profiles, pub, readiness, sm);
@@ -361,7 +363,7 @@ public sealed class M8ClosedLoopGateTests : IDisposable
         return new TelemetryFrame(
             Provider: new ProviderStatus(
                 ProviderHealth.Healthy, "5", session ?? "session-1", seq, 16, t,
-                TimeSpan.FromMilliseconds(5), SourceGeneration: 1),
+                TimeSpan.FromMilliseconds(5), SourceGeneration: 1, AttachmentProcessId: 4242),
             Player: new UnitState(
                 "player-1", "Test", 45, "Warrior", true, "friendly",
                 new HealthState(5000, 5000), new ResourceState("Power", 100, 100), true, null),
@@ -373,8 +375,22 @@ public sealed class M8ClosedLoopGateTests : IDisposable
             TargetAuras: [],
             IsAbilitiesKnown: true,
             IsPlayerAurasKnown: true,
-            IsTargetAurasKnown: true);
+            IsTargetAurasKnown: true,
+            TargetKnownness: TargetKnownness.KnownTarget,
+            GameInputReady: true);
     }
+
+    private static ActionDecision Decision(
+        ulong sequence,
+        string key = "1",
+        string session = "session-1",
+        string targetId = "target-1") =>
+        new(
+            "r1", "slice", "1001", key, AcknowledgementKind.Cooldown, sequence,
+            ProviderSessionId: session,
+            SourceGeneration: 1,
+            TargetId: targetId,
+            AttachmentProcessId: 4242);
 
     private sealed class HostEnv(string root) : IHostEnvironment
     {

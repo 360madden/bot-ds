@@ -1431,9 +1431,9 @@ public sealed class V5ScannerServiceTests
         var r = svc.Read();
         Assert.True(r.Metrics.CandidateLimitHits > 0,
             "CandidateLimitHits must increment when candidate cap is hit");
-        // Ranked partial candidates may still produce a usable live frame.
+        // Multiple distinct partial candidates are ambiguous and must fail closed.
         if (!r.IsUsable)
-            Assert.Equal(ReaderFailureCode.CandidateLimitExceeded, r.FailureCode);
+            Assert.Equal(ReaderFailureCode.CandidateAmbiguous, r.FailureCode);
     }
 }
 
