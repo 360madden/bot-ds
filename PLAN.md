@@ -1,6 +1,6 @@
 # BotDs Formal Implementation Plan
 
-Status: Active. M1 transport selected (V5 process memory). M2-M8 code-complete with live residuals deferred. M9 planned.
+Status: Active. M1 transport selected (V5 process memory). M2-M8 code-complete with live residuals deferred. M9 Complete (2026-07-21).
 
 Last updated: 2026-07-21
 
@@ -67,11 +67,8 @@ Movement, navigation, pathfinding, target acquisition, target switching, questin
 | Settings | Validated local settings, editable while disarmed, persisted atomically |
 | Metrics | In-process counters, gauges, bounded histories, and latency distributions exposed in the dashboard |
 | Logging | Structured local NDJSON with bounded retention |
-| Time | Injected monotonic `TimeProvider` for durations and freshness |
-
-## 4. Telemetry Transport Decision Gate
-
-The Lua addon observation surface is selected. M1 is an approved read-only decision experiment. The physical production transport remains unresolved because the current immutable Lua string does not satisfy the V5 stable-memory contract. No live provider implementation begins until this section is resolved and the plan is updated.
+| Time | Injected monotonic `TimeProvider` for durations and freshness |## 4. Telemetry Transport Decision Gate
+The Lua addon observation surface is selected. M1 is an approved read-only decision experiment. The physical production transport is **DECIDED** (see §4.3). No live provider implementation begins until this section is resolved and the plan is updated.
 
 ### 4.1 Preferred path: stable process-memory publication
 

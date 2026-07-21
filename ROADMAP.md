@@ -181,7 +181,7 @@ Goal: Deliver the interactive dashboard foundation for contracts completed throu
 ### Remaining
 
 - Percentile latency summaries (M8).
-- Final responsive/accessibility pass (M9).
+- ~~Final responsive/accessibility pass (M9).~~ ✅ Complete
 
 ## M5: Profiles And Progression Readiness
 
@@ -255,7 +255,7 @@ Goal: Add the narrow native boundary that sends configured combat keys.
 ### Remaining
 
 - Global emergency-stop hotkey registration (M8 — requires live game safety).
-- Dedicated test-window executable for input testing (M9).
+- ~~Dedicated test-window executable for input testing (M9).~~ Deferred.
 - Input-metric dashboard view (M8/M9).
 
 ## M8: Closed-Loop Live Combat
