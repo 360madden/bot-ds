@@ -80,7 +80,10 @@ html {
 
 body {
   font-family: var(--font);
-  background: var(--bg-body);
+  background:
+    radial-gradient(ellipse at 20% 20%, rgba(88, 166, 255, .04) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 80%, rgba(188, 140, 255, .03) 0%, transparent 50%),
+    var(--bg-body);
   color: var(--text-primary);
   line-height: 1.5;
   min-height: 100vh;
@@ -195,12 +198,15 @@ body {
   cursor: pointer;
   background: #21262d;
   color: var(--text-primary);
-  transition: background var(--duration), border-color var(--duration);
+  transition: background var(--duration), border-color var(--duration), transform var(--duration), box-shadow var(--duration);
   white-space: nowrap;
   user-select: none;
 }
 .btn:hover:not(:disabled) {
   background: #30363d;
+}
+.btn:active:not(:disabled) {
+  transform: scale(.97);
 }
 .btn:disabled {
   opacity: .4;
@@ -297,10 +303,12 @@ body {
   border: 1px solid #30363d;
   border-radius: var(--radius);
   padding: var(--card-pad);
-  transition: border-color var(--duration);
+  transition: border-color var(--duration), box-shadow var(--duration), transform var(--duration);
 }
 .card:hover {
   border-color: #3d444d;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .3);
+  transform: translateY(-1px);
 }
 
 .card__hint {
@@ -337,6 +345,13 @@ body {
   text-align: left;
   border-bottom: 1px solid rgba(110, 118, 129, 0.2);
   white-space: nowrap;
+}
+
+.data-table tbody tr {
+  transition: background var(--duration);
+}
+.data-table tbody tr:hover {
+  background: rgba(88, 166, 255, .06);
 }
 
 .data-table th {
@@ -611,8 +626,16 @@ dialog::backdrop {
   height: 100%;
   background: var(--hp-high);
   border-radius: var(--radius-sm);
-  transition: width var(--duration), background var(--duration);
+  transition: width .3s ease-out, background var(--duration);
   width: 0%;
+  position: relative;
+}
+.health-bar__fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,.15) 0%, transparent 50%);
+  border-radius: var(--radius-sm);
 }
 
 .health-bar__text {
@@ -649,8 +672,16 @@ dialog::backdrop {
   height: 100%;
   background: var(--accent-dim);
   border-radius: var(--radius-sm);
-  transition: width var(--duration);
+  transition: width .3s ease-out;
   width: 0%;
+  position: relative;
+}
+.resource-bar__fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,.12) 0%, transparent 50%);
+  border-radius: var(--radius-sm);
 }
 .resource-bar__text {
   position: absolute;
@@ -716,9 +747,21 @@ dialog::backdrop {
   padding: .15rem 0;
   border-bottom: 1px solid #21262d;
   word-break: break-word;
+  animation: logFadeIn .3s ease-out;
 }
 .log-entry:last-child {
   border-bottom: none;
+}
+
+@keyframes logFadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .log-entry__time {
@@ -890,8 +933,13 @@ dialog::backdrop {
   font-family: var(--mono);
   font-size: .82rem;
 }
-.form-row input:focus {
+.form-row input:focus,
+.token-input:focus,
+.select:focus,
+.profile-editor__textarea:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, .15);
+  outline: none;
 }
 
 .settings-actions {
@@ -1148,4 +1196,178 @@ dialog::backdrop {
   animation: spin .6s linear infinite;
   vertical-align: middle;
   margin-left: .4rem;
+}
+
+/* ---------- Scrollbar ---------- */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-input);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3d444d;
+}
+::-webkit-scrollbar-corner {
+  background: var(--bg-input);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #30363d var(--bg-input);
+}
+
+/* ---------- Toast notifications ---------- */
+.toast-container {
+  position: fixed;
+  top: 4rem;
+  right: 1rem;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  max-width: 360px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: .5rem;
+  padding: .75rem 1rem;
+  background: var(--bg-card);
+  border: 1px solid #30363d;
+  border-radius: var(--radius);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, .5);
+  font-size: .85rem;
+  pointer-events: auto;
+  animation: toastSlideIn .3s ease-out;
+  transition: opacity .2s, transform .2s;
+}
+
+.toast--exiting {
+  opacity: 0;
+  transform: translateX(100%);
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.toast__icon {
+  flex-shrink: 0;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.toast__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast__title {
+  font-weight: 600;
+  font-size: .82rem;
+  margin-bottom: .1rem;
+}
+
+.toast__message {
+  color: var(--text-secondary);
+  font-size: .8rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.toast__close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: .1rem;
+  font-size: 1rem;
+  line-height: 1;
+  opacity: .6;
+  transition: opacity var(--duration);
+}
+.toast__close:hover {
+  opacity: 1;
+  color: var(--text-primary);
+}
+
+.toast--success {
+  border-left: 3px solid var(--green);
+}
+.toast--success .toast__title { color: var(--green); }
+
+.toast--error {
+  border-left: 3px solid var(--red);
+}
+.toast--error .toast__title { color: var(--red); }
+
+.toast--warn {
+  border-left: 3px solid var(--yellow);
+}
+.toast--warn .toast__title { color: var(--yellow); }
+
+.toast--info {
+  border-left: 3px solid var(--accent);
+}
+.toast--info .toast__title { color: var(--accent); }
+
+/* ---------- SSE indicator enhancement ---------- */
+.sse-indicator:hover {
+  border-color: #3d444d;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .5);
+}
+
+.sse-dot[data-state="connected"] {
+  box-shadow: 0 0 6px rgba(63, 185, 80, .5);
+}
+.sse-dot[data-state="error"] {
+  box-shadow: 0 0 6px rgba(248, 81, 73, .5);
+}
+
+/* ---------- Settings form polish ---------- */
+.settings-form fieldset {
+  transition: border-color var(--duration);
+}
+.settings-form fieldset:hover {
+  border-color: #3d444d;
+}
+
+.settings-status {
+  transition: color var(--duration);
+}
+
+/* ---------- Outcome tag transitions ---------- */
+.outcome-tag {
+  transition: background var(--duration);
+}
+
+/* ---------- Action history row polish ---------- */
+.action-history-table tbody tr {
+  transition: background var(--duration);
+}
+
+/* ---------- Detail row transition ---------- */
+.detail-row {
+  transition: background var(--duration);
+}
+.detail-row:hover {
+  background: rgba(88, 166, 255, .04);
 }

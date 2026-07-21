@@ -19,6 +19,42 @@ M8 safety-hardening is **complete** and **DryRun-proven**. M9 packaging is **ver
 - The authoritative addon destination is `{MyDocuments}\RIFT\Interface\AddOns\BotDsBridge`, where shell MyDocuments is currently `C:\Users\mrkoo\OneDrive\Documents`.
 - Before claiming addon deployment success, verify sibling addons exist in the destination parent, then require in-game `/reloadui`.
 
+## Completed this session (2026-07-21d — M9 dashboard polish)
+
+### Dashboard UI polish
+
+**CSS micro-interactions:**
+- Card hover: `translateY(-1px)` lift + box-shadow transition
+- Button active: `scale(.97)` press feedback
+- Input focus: `box-shadow` glow ring (0 0 0 3px) on all form inputs, selects, textareas
+- Data table rows: hover background highlight
+- Detail rows: hover background highlight
+- Log entries: `logFadeIn` slide-in animation (opacity + translateX)
+
+**Visual polish:**
+- Body background: dual radial gradients (blue + purple accent washes)
+- Health/resource bars: shimmer gradient overlay via `::after` pseudo-element
+- Health bar width transition: eased to `.3s ease-out` for smoother updates
+- Custom scrollbar: WebKit `::-webkit-scrollbar` thin styling + Firefox `scrollbar-width: thin`
+- SSE indicator: glow `box-shadow` on connected (green) and error (red) states
+- Settings fieldsets: hover border highlight
+- Outcome tags, action history rows: hover transitions
+
+**Toast notification system:**
+- Toast container in `index.html` with `aria-live="polite"`
+- 4 variants: success (green), error (red), warn (yellow), info (blue) — all with left border accent
+- Auto-dismiss after 4s with exit animation (`toastSlideIn`/`toast--exiting`)
+- Manual dismiss via × button, max 5 visible toasts
+- Wired into: settings save, profile save, control actions (arm/disarm/stop)
+
+**Cleanup:**
+- Removed dead `escapeHtml` regex duplicate in app.js
+- Removed redundant `.coord-actions .select:focus` and `.profile-controls .select:focus` rules
+
+**Accessibility preserved:** all animations zeroed under `prefers-reduced-motion`, focus-visible outline maintained, aria-live regions correct.
+
+**All 7 gates green** (600 tests, format clean, js/lua OK).
+
 ## Completed this session (2026-07-21c — M9 performance soak)
 
 ### Performance soak — 5.5 min against live RIFT
@@ -103,7 +139,7 @@ git diff --check                   ✅
 
 - M0-M7: Complete
 - M8: **Offline safety-hardening complete.** Live acceptance deferred.
-- M9: **In progress** — publish script created + verified self-contained; performance soak complete (99.6% cache hit rate, 0 read failures); dashboard polish + acceptance matrix remain.
+- M9: **In progress** — publish script created + verified self-contained; performance soak complete (99.6% cache hit rate, 0 read failures); dashboard polish complete (micro-interactions, toast system, visual polish); acceptance matrix remains.
 - Bridge: 0.2.1, protocol/schema v2 unchanged
 - Tests: 600 green
 - Publish: 107 MB self-contained at `publish\BotDs.App.exe` (gitignored)
@@ -116,7 +152,7 @@ git diff --check                   ✅
 4. ~~Deep bug hunt~~ ✅ **0 critical bugs found.**
 5. ~~Create publish-botds.cmd~~ ✅
 6. ~~Verify self-contained publish + smoke test~~ ✅
-7. Dashboard responsive/accessibility final pass (M9)
+7. ~~Dashboard responsive/accessibility final pass (M9)~~ ✅ **CSS micro-interactions, toast notifications, health bar shimmers, scrollbar styling, body gradient, card hover lift, focus glow rings**
 8. ~~Performance soak~~ ✅ **99.6% cache hit rate, 0 read failures, 5.5 min soak (526 reads, 2,908 addon frames)**
 9. Full PLAN.md §15 acceptance matrix (M9)
 10. **Do not enter Live mode.** M8 Live acceptance remains deferred.

@@ -249,6 +249,47 @@
     return el.innerHTML;
   }
 
+  // ---- Toast notifications ----
+  const toastContainer = $("toast-container");
+  const TOAST_DURATION_MS = 4000;
+
+  function showToast(type, title, message) {
+    if (!toastContainer) return;
+    var icons = { success: "✓", error: "✗", warn: "⚠", info: "ℹ" };
+    var toast = document.createElement("div");
+    toast.className = "toast toast--" + (type || "info");
+    toast.setAttribute("role", "status");
+    toast.innerHTML =
+      '<span class="toast__icon">' + (icons[type] || icons.info) + '</span>' +
+      '<div class="toast__body">' +
+        '<div class="toast__title">' + escapeHtml(title || "") + '</div>' +
+        (message ? '<div class="toast__message">' + escapeHtml(message) + '</div>' : '') +
+      '</div>' +
+      '<button class="toast__close" aria-label="Dismiss">&times;</button>';
+
+    var closeBtn = toast.querySelector(".toast__close");
+    var timer = null;
+
+    function dismiss() {
+      if (timer) { clearTimeout(timer); timer = null; }
+      toast.classList.add("toast--exiting");
+      setTimeout(function () {
+        if (toast.parentNode) toast.parentNode.removeChild(toast);
+      }, 200);
+    }
+
+    closeBtn.addEventListener("click", dismiss);
+    toastContainer.appendChild(toast);
+
+    timer = setTimeout(dismiss, TOAST_DURATION_MS);
+
+    // Limit to 5 toasts
+    while (toastContainer.children.length > 5) {
+      var first = toastContainer.firstElementChild;
+      if (first) first.remove();
+    }
+  }
+
   // ---- Status badge ----
   function setStatusBadge(el, value) {
     if (!el) return;
@@ -434,14 +475,6 @@
         "</tr>";
     });
     body.innerHTML = html || '<tr><td colspan="3" class="data-table__empty">Empty bar</td></tr>';
-  }
-
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
   }
 
   var abilitiesRefreshBusy = false;
@@ -1011,11 +1044,13 @@
       settingsStatus.textContent = "Saving…";
       var result = await apiFetch("/api/settings", "PUT", payload);
       settingsStatus.textContent = "✓ Saved";
+      showToast("success", "Settings saved", "Scanner, evaluator, and dashboard settings updated.");
       // Refresh form with server state
       await loadSettings();
       addLogEntry("info", "settings", "Settings saved");
     } catch (err) {
       settingsStatus.textContent = "Error: " + err.message;
+      showToast("error", "Settings save failed", err.message);
       addLogEntry("error", "settings", "Settings save failed: " + err.message);
     } finally {
       updateSettingsButtonState();
@@ -1038,6 +1073,7 @@
     try {
       await apiFetch(endpoint, "POST");
       addLogEntry("info", "control", label + " sent");
+      showToast("info", label, "Command sent to controller.");
       // Poll immediately for fresh state
       pollStatus();
     } catch (err) {
@@ -1286,11 +1322,13 @@
       editorStatus.textContent = "Saving…";
       await apiFetch("/api/profiles/" + encodeURIComponent(selectedProfileId), "PUT", body);
       editorStatus.textContent = "✓ Saved";
+      showToast("success", "Profile saved", "Profile '" + selectedProfileId + "' updated.");
       addLogEntry("info", "editor", "Profile '" + selectedProfileId + "' saved");
       // Reload profiles to refresh cache
       await loadProfiles();
     } catch (err) {
       editorStatus.textContent = "Error: " + err.message;
+      showToast("error", "Profile save failed", err.message);
       addLogEntry("error", "editor", "Profile save failed: " + err.message);
     } finally {
       updateEditorSaveState();
