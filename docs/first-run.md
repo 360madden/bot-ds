@@ -27,9 +27,11 @@ Dashboard: `http://localhost:5068` (loopback only, no token).
 ## Run (published)
 
 ```text
-dotnet publish src/BotDs.App/BotDs.App.csproj -c Release -r win-x64 --self-contained false -o publish/
+publish-botds.cmd
 run-botds.cmd --publish
 ```
+
+One-step publish produces `publish\BotDs.App.exe` (self-contained win-x64, no .NET runtime required).
 
 Executable: `publish\BotDs.App.exe` (not `BotDs.exe`).
 

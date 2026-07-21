@@ -1,6 +1,6 @@
 # BotDs Implementation Handoff
 
-Last updated: **2026-07-21** (M8 offline safety-hardening **complete** + **DryRun proof passed** + **deep bug hunt: 0 critical issues**; 600 tests green; all gates passing)
+Last updated: **2026-07-21** (M9 packaging begun — `publish-botds.cmd` created, all 7 gates green, **600 tests**, live telemetry **re-verified** against RIFT PID 33140)
 
 **Repo:** `C:\work\bot-ds`
 
@@ -8,7 +8,7 @@ Last updated: **2026-07-21** (M8 offline safety-hardening **complete** + **DryRu
 
 ## Resume in one paragraph
 
-The M8 safety-hardening pass is **complete** and **DryRun-proven** against live RIFT. All three HANDOFF review points resolved, cleanup logging added to `WindowsKeySink`, four targeted tests added (SnapshotAssembler PID propagation + coordinator payload shape), `dotnet format` applied, all docs reconciled, all 7 repository gates pass, bridge 0.2.1 deployed and verified, and the app successfully attached to live RIFT (PID 33140, rift_x64.exe) producing Healthy schema-v2 telemetry with player "Atank" L45 Warrior, target present, coordinator showing Disabled mode with `PendingAction=null` and correct `InputSink`/`LiveBlockers` API payloads. **600 tests green.** DryRun is log-only. Live supports Cast/Cooldown acknowledgements only. Live dispatch enforces sink capability/PID matching, verified bindings, emergency hotkey registration, pre-input fence revalidation, and Win32 partial-send cleanup with fault latching. Stop before Live mode.
+M8 safety-hardening is **complete** and **DryRun-proven**. M9 packaging is underway: `publish-botds.cmd` provides one-step `dotnet publish -c Release -r win-x64 --self-contained` → `publish\BotDs.App.exe`, the existing `run-botds.cmd --publish` launcher covers runtime. Live telemetry re-verified against RIFT PID 33140: Healthy provider, player "Atank" L45 Warrior with 55 abilities, cache-hit scanner at 50ms cadence, coordinator Disabled with correct InputSink/LiveBlockers payloads. **600 tests green, all 7 gates pass.** DryRun is log-only. Live supports Cast/Cooldown acknowledgements only. Stop before Live mode.
 
 ## Safety boundaries
 
@@ -83,7 +83,7 @@ git diff --check                   ✅
 
 - M0-M7: Complete
 - M8: **Offline safety-hardening complete.** Live acceptance deferred.
-- M9: Planned
+- M9: **In progress** — `publish-botds.cmd` created; dashboard, docs, performance soak, acceptance matrix remain.
 - Bridge: 0.2.1, protocol/schema v2 unchanged
 - Tests: 600 green
 
@@ -92,5 +92,9 @@ git diff --check                   ✅
 1. ~~Deploy bridge 0.2.1~~ ✅
 2. ~~Verify sibling addons~~ ✅
 3. ~~DryRun-only proof~~ ✅
-4. ~~Deep bug hunt~~ ✅ **0 critical bugs found.** Full-stack sweep: concurrency, null safety, resource management, exception handling, state machines — all clear. One benign race noted (non-atomic reset of log-throttling counter).
-5. **Do not enter Live mode.** M8 Live acceptance remains deferred.
+4. ~~Deep bug hunt~~ ✅ **0 critical bugs found.**
+5. ~~Create publish-botds.cmd~~ ✅
+6. Dashboard responsive/accessibility final pass (M9)
+7. Performance soak: 10,000-sample procedure with p50/p95/p99/max metrics (M9)
+8. Full PLAN.md §15 acceptance matrix (M9)
+9. **Do not enter Live mode.** M8 Live acceptance remains deferred.

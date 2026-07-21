@@ -308,9 +308,16 @@ Code-level fail-closed criteria are covered by tests. Remaining roadmap exit cri
 
 ## M9: Final Acceptance And Packaging
 
-Status: Planned
+Status: In progress (2026-07-21)
 
 Goal: Deliver a repeatable, documented, fully working local combat bot.
+
+### Delivered
+
+- `publish-botds.cmd` — one-step `dotnet publish -c Release -r win-x64 --self-contained` producing `publish\BotDs.App.exe`.
+- `run-botds.cmd --publish` launcher for published binary (pre-existing, verified).
+- Live telemetry re-verified: Healthy provider, 55 abilities, cache-hit scanner at 50ms cadence against RIFT PID 33140.
+- All 7 repository gates green (600 tests, 0e 0w, format clean, js/lua syntax OK).
 
 ### Work
 
