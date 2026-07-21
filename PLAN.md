@@ -1,8 +1,8 @@
 # BotDs Formal Implementation Plan
 
-Status: Active. M1 transport selected (V5 process memory). M3 snapshot assembly complete. M4 settings and dashboard in progress.
+Status: Active. M1 transport selected (V5 process memory). M2-M8 code-complete with live residuals deferred. M9 planned.
 
-Last updated: 2026-07-20
+Last updated: 2026-07-21
 
 ## 1. Final Outcome
 

@@ -46,7 +46,9 @@ try
         if (boundPid is > 0)
         {
             int chordMs = builder.Configuration.GetValue<int>("BotDs:Input:ChordPressMs", 30);
-            builder.Services.AddSingleton<IKeySink>(new WindowsKeySink(boundPid.Value, chordPressMs: chordMs));
+            builder.Services.AddSingleton<IKeySink>(sp =>
+                new WindowsKeySink(boundPid.Value, chordPressMs: chordMs,
+                    logger: sp.GetRequiredService<ILogger<WindowsKeySink>>()));
             Log.Information("WindowsKeySink bound to PID {Pid}, chord press {ChordMs}ms", boundPid, chordMs);
         }
         else

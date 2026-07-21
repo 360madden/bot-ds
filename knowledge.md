@@ -14,7 +14,7 @@
 
 A personal, local combat-only bot for Gamigo's RIFT MMO on Windows x64. C# .NET 10 app that observes game state via a Lua addon → telemetry transport → memory reader, evaluates data-driven combat profiles, and sends foreground keyboard input via `SendInput`. Movement, pathfinding, navigation, target acquisition/switching are out of scope.
 
-**Status:** See `HANDOFF.md` / `ROADMAP.md` (M2/M8 code-complete with live residuals). Do not trust older test counts in this file.
+**Status:** See `HANDOFF.md` / `ROADMAP.md` (M2/M8 code-complete with live residuals; M8 offline safety-hardening complete). 600 tests green. All gates passing.
 
 ## Project Layout
 
@@ -23,11 +23,12 @@ BotDs.sln
 ├── src/
 │   ├── BotDs.Core/          # net10.0 — domain models, profiles, evaluator (transport-neutral)
 │   ├── BotDs.Reader/        # net10.0-windows — V5 memory scanner, Win32 interop (unsafe)
+│   ├── BotDs.Input/         # net10.0-windows — key sink, SendInput, emergency hotkey
 │   └── BotDs.App/           # net10.0-windows — ASP.NET Core dashboard, controller, services
-├── tests/BotDs.Tests/       # net10.0-windows — xUnit (378 tests)
+├── tests/BotDs.Tests/       # net10.0-windows — xUnit (600 tests)
 ├── profiles/                # Versioned JSON combat profiles
 ├── schemas/                 # JSON Schema for combat profiles
-├── addons/BotDsBridge/      # Lua addon + PROTOCOL.md (V5 wire-format spec)
+├── addons/BotDsBridge/      # Lua addon v0.2.1 + PROTOCOL.md (V5 wire-format spec, schema v2)
 └── context/                 # Historical RIFT automation research (read-only reference)
 ```
 
@@ -59,10 +60,10 @@ git diff --check
 ## Architecture Data Flow
 
 ```
-RIFT Inspect APIs → BotDsBridge Lua addon → Transport (M1 gate) → ITelemetrySource
-  → HeartbeatSnapshotAssembler → ObservationSnapshot
-    ├→ CombatEvaluator → ActionIntent
-    │    └→ ActionCoordinator → ForegroundProcessGuard → WindowsKeySink (SendInput)
+RIFT Inspect APIs → BotDsBridge Lua addon (v0.2.1, schema v2) → V5 process memory
+  → TelemetryReaderLoop → SnapshotAssembler → ObservationSnapshot
+    ├→ CombatEvaluator → ActionDecision
+    │    └→ ActionCoordinator → WindowsKeySink (SendInput, foreground-only)
     └→ Dashboard (SSE + REST, loopback only)
 ```
 
@@ -78,39 +79,28 @@ Versioned JSON in `profiles/`. Schema at `schemas/combat-profile.schema.json`. C
 - Enabled rules cannot reference disabled bindings
 - Level ranges must overlap between rules and profile range
 
-## Current Limitations (Gotchas)
+## Action Coordinator
 
-1. **No hosted Reader loop** — scanner is testable but not wired as a hosted service. App publishes empty `TelemetryFrame`.
-2. **Lua provider-only** — addon emits V5 envelope/heartbeat but stubs all game-state sections (Player, Target, Abilities, Auras). Immutable Lua string issue means V5 stable-memory contract is unproven.
-3. **No action output** — no keyboard actuator exists. Evaluator produces `ActionDecision` records but they're logged only.
-4. **Warrior fixture is disabled** — real ability IDs, keys, and rotation rules not yet supplied by user.
-5. **M1 transport unresolved** — either V5 process memory (needs mutable storage proof) or optical addon-rendered fallback.
+Three output modes: **Disabled** (startup default), **DryRun** (log-only, never calls sink, no acks, no binding verification), **Live** (requires: Live-capable sink with matching PID, verified bindings, registered emergency hotkey, known-ready game input, only Cast/Cooldown ack kinds). DryRun dispatches are log-only and do not create pending actions.
+
+## Current Limitations
+
+1. **Live mode unproven** — DryRun proof still needed against live RIFT client. All offline safety gates pass.
+2. **Warrior fixture is disabled** — real ability IDs, keys, and rotation rules not yet supplied by user.
+3. **Immutable Lua string** — V5 stable-memory contract relies on GC/allocator behavior; live-proven working but formal 10,000-publication soak not yet performed.
+4. **No movement, pathfinding, or navigation** — explicitly out of scope.
 
 ## Milestone Roadmap
 
 | Milestone | Status | What |
 |-----------|--------|------|
-| M0 | Complete | Foundation: Core, Reader, App, tests (378 passing) |
-| M1 | Active | Transport decision gate + current-client conformance |
-| M2 | Planned | Live telemetry provider (Player + Target + Abilities + Auras) |
-| M3 | Planned | Hosted source loop, snapshot assembly, replay |
-| M4 | Planned | Dashboard settings, metrics, source views |
-| M5 | Planned | Profiles: strict validation, editor, Warrior fixture, generic profile |
-| M6 | Planned | Dry-run action coordinator (no native input) |
-| M7 | Planned | Foreground Windows `SendInput` + emergency hotkey |
-| M8 | Planned | Closed-loop live combat (incremental enablement) |
+| M0 | Complete | Foundation: Core, Reader, App, tests |
+| M1 | Decided | Transport decision gate — V5 process memory selected |
+| M2 | Code-complete | Live telemetry provider (live soak deferred) |
+| M3 | Complete | Hosted source loop, snapshot assembly, replay |
+| M4 | Complete | Dashboard settings, metrics, source views |
+| M5 | Complete | Profiles: strict validation, editor, progression |
+| M6 | Complete | Dry-run action coordinator (log-only) |
+| M7 | Complete | Foreground Windows `SendInput` + emergency hotkey |
+| M8 | Code-complete | Closed-loop live combat (offline hardening complete; live residual deferred) |
 | M9 | Planned | Final acceptance, packaging, performance soak |
-
-## OpenCode Agent Swarm
-
-Project uses `.opencode/agents/` with path-based ownership:
-- `protocol-engineer`: Reader + addon transport
-- `dashboard-worker`: wwwroot frontend
-- `general`: App host/services (excluding wwwroot)
-- `test-worker`: tests
-- `core-worker`: Core + profiles + schemas
-- `integrator`: cross-project integration, DI wiring, build
-- `reviewer`: final findings-only review
-- `architect`, `researcher`: read-only design/research
-
-GPT models reserved for architecture/integration/review. Non-GPT agents use OpenCode Go or catalog-free models.

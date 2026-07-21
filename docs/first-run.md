@@ -39,7 +39,7 @@ Executable: `publish\BotDs.App.exe` (not `BotDs.exe`).
 deploy-addon.cmd
 ```
 
-In RIFT: `/reloadui` — expect chat `BotDs Bridge v0.2.0` (or newer).
+In RIFT: `/reloadui` — expect chat `BotDs Bridge v0.2.1` (or newer).
 
 ## Live DryRun checklist
 

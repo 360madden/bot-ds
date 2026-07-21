@@ -123,16 +123,52 @@ public sealed class SnapshotAssemblerTests
         Assert.True(result.Provider.GameStateEvidenceAge < TimeSpan.FromMilliseconds(100));
     }
 
+    [Fact]
+    public void Scanner_attachment_pid_propagates_to_assembled_frame_provider()
+    {
+        var assembler = new SnapshotAssembler(_time);
+        var session = Guid.NewGuid();
+
+        var result = CreateResult(session, seq: 1, heartbeat: false, hasPlayer: true, attachmentPid: 8888);
+
+        _time.Advance(TimeSpan.FromMilliseconds(50));
+        TelemetryFrame frame = assembler.Assemble(result, _time.GetUtcNow());
+
+        Assert.Equal(8888, frame.Provider.AttachmentProcessId);
+    }
+
+    [Fact]
+    public void Faulted_frame_with_pid_does_not_preserve_previous_game_state()
+    {
+        var assembler = new SnapshotAssembler(_time);
+        var session = Guid.NewGuid();
+
+        var full = CreateResult(session, seq: 1, heartbeat: false, hasPlayer: true, attachmentPid: 1111);
+        var fault = ScannerReadResult.Failure(
+            ProviderHealth.Faulted, ReaderFailureCode.CandidateInvalid,
+            "test", 2222, 1, ScannerMetrics.Empty);
+
+        _time.Advance(TimeSpan.FromMilliseconds(50));
+        TelemetryFrame f1 = assembler.Assemble(full, _time.GetUtcNow());
+        Assert.Equal(1111, f1.Provider.AttachmentProcessId);
+
+        _time.Advance(TimeSpan.FromMilliseconds(50));
+        TelemetryFrame f2 = assembler.Assemble(fault, _time.GetUtcNow());
+
+        Assert.Null(f2.Player);
+        Assert.Equal(2222, f2.Provider.AttachmentProcessId);
+    }
+
     // ── Helpers ────────────────────────────────────────────────
 
     private static ScannerReadResult CreateResult(
         Guid session, uint seq, bool heartbeat, bool hasPlayer,
-        long generation = 1, string? playerName = null)
+        long generation = 1, string? playerName = null, int attachmentPid = 1234)
     {
         var frame = CreateParsedFrame(session, seq, heartbeat,
             hasPlayer ? (playerName ?? "TestPlayer") : null);
         return ScannerReadResult.Healthy(
-            StableReadResult.Healthy(frame), 1234, generation, ScannerMetrics.Empty);
+            StableReadResult.Healthy(frame), attachmentPid, generation, ScannerMetrics.Empty);
     }
 
     private static ParsedV5Frame CreateParsedFrame(

@@ -2,7 +2,7 @@
 
 Status: Active
 
-Last updated: 2026-07-20
+Last updated: 2026-07-21
 
 The architectural contract is defined in `PLAN.md`. This roadmap orders implementation from the current tested foundation to a fully working combat bot.
 
@@ -274,7 +274,7 @@ Goal: Enable live output incrementally and prove observed acknowledgement.
 - Profile keys that collide with the emergency hotkey are rejected for DryRun/Live mode changes.
 - Target/session/source-generation change invalidates pending work; unexplained profile-ability cooldown while armed stops with `ExternalActionConflict`.
 - Dashboard binding endpoints and coordinator snapshot (including hotkey registration).
-- Closed-loop unit/integration coverage in `M8ClosedLoopGateTests` and related coordinator/ack/external-conflict tests (537 suite green as of 2026-07-21).
+- Closed-loop unit/integration coverage in `M8ClosedLoopGateTests` and related coordinator/ack/external-conflict tests (600 suite green as of 2026-07-21).
 
 ### Explicitly deferred live-only exit items
 

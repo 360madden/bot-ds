@@ -455,6 +455,49 @@ public sealed class ActionCoordinatorTests : IDisposable
         Assert.Contains(coord.GetLiveBlockers(), b => b.Contains("unsupported", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task InputSink_and_live_blockers_exposed_in_coordinator_snapshot()
+    {
+        var sink = new TestLiveKeySink(4242);
+        var (coord, _, pub, _, _) = await CreateReadyCoordinator(keySink: sink);
+
+        // Verify InputSinkStatus exposes sink capabilities
+        InputSinkStatus sinkStatus = coord.InputSink;
+        Assert.True(sinkStatus.SupportsLiveInput);
+        Assert.True(sinkStatus.IsReady);
+        Assert.Equal(4242, sinkStatus.BoundProcessId);
+
+        // Unverified bindings → Live blockers present
+        IReadOnlyList<string> blockers = coord.GetLiveBlockers();
+        Assert.NotEmpty(blockers);
+        Assert.Contains(blockers, b => b.Contains("Unverified", StringComparison.OrdinalIgnoreCase));
+
+        // Mark bindings verified — blocker should clear
+        coord.Bindings.MarkVerified("slice");
+        blockers = coord.GetLiveBlockers();
+        Assert.DoesNotContain(blockers, b => b.Contains("Unverified", StringComparison.OrdinalIgnoreCase));
+
+        // Publish frame with mismatched PID
+        TelemetryFrame baseFrame = CreateHealthyFrame();
+        TelemetryFrame mismatchedPid = baseFrame with
+        {
+            Provider = baseFrame.Provider with { AttachmentProcessId = 9999 },
+        };
+        pub.Publish(mismatchedPid);
+        blockers = coord.GetLiveBlockers();
+        Assert.Contains(blockers, b => b.Contains("does not match telemetry attachment PID", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Coordinator_snapshot_reflects_emergency_hotkey_state()
+    {
+        var (coord, _, _, _, _) = await CreateReadyCoordinator();
+
+        Assert.Equal("Ctrl+Shift+F12", coord.EmergencyHotkey.Binding);
+        Assert.True(coord.EmergencyHotkey.IsRegistered);
+        Assert.Null(coord.EmergencyHotkey.LastError);
+    }
+
     // ---- Helpers ----
 
     private async Task<(ActionCoordinator, ProfileService, SnapshotPublisher, ArmingReadinessService, ControllerStateMachine)>

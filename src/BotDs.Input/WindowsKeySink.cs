@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BotDs.Input;
 
@@ -97,6 +99,7 @@ public sealed class WindowsKeySink : IKeySink, IDisposable
     private readonly int _boundPid;
     private readonly IForegroundProvider _fg;
     private readonly IInputInjector _injector;
+    private readonly ILogger<WindowsKeySink> _log;
 
     /// <summary>Minimum interval between key-down and key-up, in milliseconds.</summary>
     private readonly int _chordPressMs;
@@ -116,13 +119,15 @@ public sealed class WindowsKeySink : IKeySink, IDisposable
         int boundPid,
         IForegroundProvider? foregroundProvider = null,
         IInputInjector? injector = null,
-        int chordPressMs = 30)
+        int chordPressMs = 30,
+        ILogger<WindowsKeySink>? logger = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(boundPid, 0);
         _boundPid = boundPid;
         _fg = foregroundProvider ?? new WindowsForegroundProvider();
         _injector = injector ?? new WindowsInputInjector();
         _chordPressMs = Math.Clamp(chordPressMs, 5, 200);
+        _log = logger ?? NullLoggerFactory.Instance.CreateLogger<WindowsKeySink>();
     }
 
     // ── IKeySink ──────────────────────────────────────────────
@@ -209,7 +214,11 @@ public sealed class WindowsKeySink : IKeySink, IDisposable
         InputInjectionResult downResult = _injector.Inject(downInputs[..downCount].ToArray(), downCount);
         if (downResult.SentCount != downCount)
         {
-            _ = _injector.Inject(cleanupInputs, cleanupInputs.Length);
+            InputInjectionResult cleanupResult = _injector.Inject(cleanupInputs, cleanupInputs.Length);
+            _log.LogWarning(
+                "Partial key-down ({Sent}/{Expected}) for VK 0x{Vk:X}; cleanup sent {CleanupSent}/{CleanupExpected}, native error={NativeError}",
+                downResult.SentCount, downCount, vk,
+                cleanupResult.SentCount, cleanupInputs.Length, downResult.NativeErrorCode);
             return false;
         }
 
@@ -223,14 +232,21 @@ public sealed class WindowsKeySink : IKeySink, IDisposable
 
         if (ct.IsCancellationRequested)
         {
-            _ = _injector.Inject(cleanupInputs, cleanupInputs.Length);
+            InputInjectionResult cancelCleanup = _injector.Inject(cleanupInputs, cleanupInputs.Length);
+            _log.LogWarning(
+                "Chord cancelled for VK 0x{Vk:X}; cleanup sent {CleanupSent}/{CleanupExpected}",
+                vk, cancelCleanup.SentCount, cleanupInputs.Length);
             return false;
         }
 
         InputInjectionResult upResult = _injector.Inject(cleanupInputs, cleanupInputs.Length);
         if (upResult.SentCount != cleanupInputs.Length)
         {
-            _ = _injector.Inject(cleanupInputs, cleanupInputs.Length);
+            InputInjectionResult retryCleanup = _injector.Inject(cleanupInputs, cleanupInputs.Length);
+            _log.LogWarning(
+                "Partial key-up ({Sent}/{Expected}) for VK 0x{Vk:X}; retry cleanup sent {RetrySent}/{RetryExpected}, native error={NativeError}",
+                upResult.SentCount, cleanupInputs.Length, vk,
+                retryCleanup.SentCount, cleanupInputs.Length, upResult.NativeErrorCode);
             return false;
         }
 
@@ -297,36 +313,100 @@ public sealed class WindowsKeySink : IKeySink, IDisposable
         private static readonly Dictionary<string, ushort> Map = new(StringComparer.OrdinalIgnoreCase)
         {
             // Digits
-            ["0"] = 0x30, ["1"] = 0x31, ["2"] = 0x32, ["3"] = 0x33, ["4"] = 0x34,
-            ["5"] = 0x35, ["6"] = 0x36, ["7"] = 0x37, ["8"] = 0x38, ["9"] = 0x39,
+            ["0"] = 0x30,
+            ["1"] = 0x31,
+            ["2"] = 0x32,
+            ["3"] = 0x33,
+            ["4"] = 0x34,
+            ["5"] = 0x35,
+            ["6"] = 0x36,
+            ["7"] = 0x37,
+            ["8"] = 0x38,
+            ["9"] = 0x39,
             // Letters
-            ["A"] = 0x41, ["B"] = 0x42, ["C"] = 0x43, ["D"] = 0x44, ["E"] = 0x45,
-            ["F"] = 0x46, ["G"] = 0x47, ["H"] = 0x48, ["I"] = 0x49, ["J"] = 0x4A,
-            ["K"] = 0x4B, ["L"] = 0x4C, ["M"] = 0x4D, ["N"] = 0x4E, ["O"] = 0x4F,
-            ["P"] = 0x50, ["Q"] = 0x51, ["R"] = 0x52, ["S"] = 0x53, ["T"] = 0x54,
-            ["U"] = 0x55, ["V"] = 0x56, ["W"] = 0x57, ["X"] = 0x58, ["Y"] = 0x59,
+            ["A"] = 0x41,
+            ["B"] = 0x42,
+            ["C"] = 0x43,
+            ["D"] = 0x44,
+            ["E"] = 0x45,
+            ["F"] = 0x46,
+            ["G"] = 0x47,
+            ["H"] = 0x48,
+            ["I"] = 0x49,
+            ["J"] = 0x4A,
+            ["K"] = 0x4B,
+            ["L"] = 0x4C,
+            ["M"] = 0x4D,
+            ["N"] = 0x4E,
+            ["O"] = 0x4F,
+            ["P"] = 0x50,
+            ["Q"] = 0x51,
+            ["R"] = 0x52,
+            ["S"] = 0x53,
+            ["T"] = 0x54,
+            ["U"] = 0x55,
+            ["V"] = 0x56,
+            ["W"] = 0x57,
+            ["X"] = 0x58,
+            ["Y"] = 0x59,
             ["Z"] = 0x5A,
             // Function keys
-            ["F1"] = 0x70, ["F2"] = 0x71, ["F3"] = 0x72, ["F4"] = 0x73,
-            ["F5"] = 0x74, ["F6"] = 0x75, ["F7"] = 0x76, ["F8"] = 0x77,
-            ["F9"] = 0x78, ["F10"] = 0x79, ["F11"] = 0x7A, ["F12"] = 0x7B,
+            ["F1"] = 0x70,
+            ["F2"] = 0x71,
+            ["F3"] = 0x72,
+            ["F4"] = 0x73,
+            ["F5"] = 0x74,
+            ["F6"] = 0x75,
+            ["F7"] = 0x76,
+            ["F8"] = 0x77,
+            ["F9"] = 0x78,
+            ["F10"] = 0x79,
+            ["F11"] = 0x7A,
+            ["F12"] = 0x7B,
             // Numpad
-            ["Numpad0"] = 0x60, ["Numpad1"] = 0x61, ["Numpad2"] = 0x62,
-            ["Numpad3"] = 0x63, ["Numpad4"] = 0x64, ["Numpad5"] = 0x65,
-            ["Numpad6"] = 0x66, ["Numpad7"] = 0x67, ["Numpad8"] = 0x68,
+            ["Numpad0"] = 0x60,
+            ["Numpad1"] = 0x61,
+            ["Numpad2"] = 0x62,
+            ["Numpad3"] = 0x63,
+            ["Numpad4"] = 0x64,
+            ["Numpad5"] = 0x65,
+            ["Numpad6"] = 0x66,
+            ["Numpad7"] = 0x67,
+            ["Numpad8"] = 0x68,
             ["Numpad9"] = 0x69,
             // Common keys
-            ["Space"] = 0x20, ["Tab"] = 0x09, ["Enter"] = 0x0D,
-            ["Escape"] = 0x1B, ["Esc"] = 0x1B,
-            ["Backspace"] = 0x08, ["Delete"] = 0x2E, ["Insert"] = 0x2D,
-            ["Home"] = 0x24, ["End"] = 0x23, ["PageUp"] = 0x21, ["PageDown"] = 0x22,
-            ["Up"] = 0x26, ["Down"] = 0x28, ["Left"] = 0x25, ["Right"] = 0x27,
+            ["Space"] = 0x20,
+            ["Tab"] = 0x09,
+            ["Enter"] = 0x0D,
+            ["Escape"] = 0x1B,
+            ["Esc"] = 0x1B,
+            ["Backspace"] = 0x08,
+            ["Delete"] = 0x2E,
+            ["Insert"] = 0x2D,
+            ["Home"] = 0x24,
+            ["End"] = 0x23,
+            ["PageUp"] = 0x21,
+            ["PageDown"] = 0x22,
+            ["Up"] = 0x26,
+            ["Down"] = 0x28,
+            ["Left"] = 0x25,
+            ["Right"] = 0x27,
             // Symbols / OEM
-            ["-"] = 0xBD, ["="] = 0xBB, ["["] = 0xDB, ["]"] = 0xDD,
-            ["\\"] = 0xDC, [";"] = 0xBA, ["'"] = 0xDE, [","] = 0xBC,
-            ["."] = 0xBE, ["/"] = 0xBF, ["`"] = 0xC0,
+            ["-"] = 0xBD,
+            ["="] = 0xBB,
+            ["["] = 0xDB,
+            ["]"] = 0xDD,
+            ["\\"] = 0xDC,
+            [";"] = 0xBA,
+            ["'"] = 0xDE,
+            [","] = 0xBC,
+            ["."] = 0xBE,
+            ["/"] = 0xBF,
+            ["`"] = 0xC0,
             // Modifiers (should be parsed as modifiers, not keys, but included for safety)
-            ["Shift"] = VK_SHIFT, ["Ctrl"] = VK_CONTROL, ["Alt"] = VK_MENU,
+            ["Shift"] = VK_SHIFT,
+            ["Ctrl"] = VK_CONTROL,
+            ["Alt"] = VK_MENU,
         };
 
         public static ushort? Resolve(string key)

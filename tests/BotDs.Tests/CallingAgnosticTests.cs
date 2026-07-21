@@ -26,16 +26,26 @@ public sealed class CallingAgnosticTests
             {
                 ["fireball"] = new AbilityBinding
                 {
-                    AbilityId = "mage-fireball-1", Key = "1", Enabled = true, Required = true,
+                    AbilityId = "mage-fireball-1",
+                    Key = "1",
+                    Enabled = true,
+                    Required = true,
                 },
                 ["frostbolt"] = new AbilityBinding
                 {
-                    AbilityId = "mage-frostbolt-1", Key = "2", Enabled = true, Required = true,
+                    AbilityId = "mage-frostbolt-1",
+                    Key = "2",
+                    Enabled = true,
+                    Required = true,
                 },
                 ["arcane-blast"] = new AbilityBinding
                 {
-                    AbilityId = "mage-arcane-blast-1", Key = "3", Enabled = true, Required = false,
-                    MinimumLevel = 55, MaximumLevel = 60,
+                    AbilityId = "mage-arcane-blast-1",
+                    Key = "3",
+                    Enabled = true,
+                    Required = false,
+                    MinimumLevel = 55,
+                    MaximumLevel = 60,
                 },
             },
             Rules = new List<CombatRule>
@@ -155,7 +165,9 @@ public sealed class CallingAgnosticTests
             {
                 ["slash"] = new AbilityBinding
                 {
-                    AbilityId = "warrior-slash-1", Key = "1", Enabled = true,
+                    AbilityId = "warrior-slash-1",
+                    Key = "1",
+                    Enabled = true,
                 },
             },
             Rules = new List<CombatRule>
@@ -195,16 +207,26 @@ public sealed class CallingAgnosticTests
             {
                 ["fireball"] = new AbilityBinding
                 {
-                    AbilityId = "mage-fireball-1", Key = "1", Enabled = true, Required = true,
+                    AbilityId = "mage-fireball-1",
+                    Key = "1",
+                    Enabled = true,
+                    Required = true,
                 },
                 ["frostbolt"] = new AbilityBinding
                 {
-                    AbilityId = "mage-frostbolt-1", Key = "2", Enabled = true, Required = true,
+                    AbilityId = "mage-frostbolt-1",
+                    Key = "2",
+                    Enabled = true,
+                    Required = true,
                 },
                 ["arcane-blast"] = new AbilityBinding
                 {
-                    AbilityId = "mage-arcane-blast-1", Key = "3", Enabled = true, Required = false,
-                    MinimumLevel = 55, MaximumLevel = 60,
+                    AbilityId = "mage-arcane-blast-1",
+                    Key = "3",
+                    Enabled = true,
+                    Required = false,
+                    MinimumLevel = 55,
+                    MaximumLevel = 60,
                 },
             },
             Rules = new List<CombatRule>

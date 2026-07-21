@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
     <ProjectReference Include="..\BotDs.Core\BotDs.Core.csproj" />
   </ItemGroup>
 

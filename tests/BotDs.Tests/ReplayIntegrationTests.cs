@@ -196,8 +196,10 @@ public sealed class ReplayIntegrationTests : IDisposable
             Snapshot = BuildSnapshot(100, 0, 100),
             ExpectedDispatch = new ReplayDispatch
             {
-                RuleId = "fireball-main", AbilityAlias = "fireball",
-                AbilityId = "1001", Key = "1",
+                RuleId = "fireball-main",
+                AbilityAlias = "fireball",
+                AbilityId = "1001",
+                Key = "1",
             },
         });
 
@@ -227,8 +229,10 @@ public sealed class ReplayIntegrationTests : IDisposable
             Snapshot = BuildSnapshot(103, 0, 70),
             ExpectedDispatch = new ReplayDispatch
             {
-                RuleId = "fireball-main", AbilityAlias = "fireball",
-                AbilityId = "1001", Key = "1",
+                RuleId = "fireball-main",
+                AbilityAlias = "fireball",
+                AbilityId = "1001",
+                Key = "1",
             },
         });
 
@@ -251,25 +255,40 @@ public sealed class ReplayIntegrationTests : IDisposable
             },
             Player = new ReplayUnitState
             {
-                Id = "player-1", Name = "TestWarrior", Level = 50,
-                Calling = "Warrior", IsPlayer = true, Relation = "friendly",
-                CurrentHealth = 5000, MaxHealth = 5000,
-                ResourceKind = "Power", ResourceCurrent = 100, ResourceMax = 100,
+                Id = "player-1",
+                Name = "TestWarrior",
+                Level = 50,
+                Calling = "Warrior",
+                IsPlayer = true,
+                Relation = "friendly",
+                CurrentHealth = 5000,
+                MaxHealth = 5000,
+                ResourceKind = "Power",
+                ResourceCurrent = 100,
+                ResourceMax = 100,
                 InCombat = true,
             },
             Target = new ReplayUnitState
             {
-                Id = "target-1", Name = "TestMob", Level = 50,
-                Calling = null, IsPlayer = false, Relation = "hostile",
-                CurrentHealth = curHp, MaxHealth = maxHp,
+                Id = "target-1",
+                Name = "TestMob",
+                Level = 50,
+                Calling = null,
+                IsPlayer = false,
+                Relation = "hostile",
+                CurrentHealth = curHp,
+                MaxHealth = maxHp,
                 InCombat = true,
             },
             Abilities = new Dictionary<string, ReplayAbilityState>
             {
                 ["1001"] = new ReplayAbilityState
                 {
-                    Id = "1001", Available = true, Usable = true,
-                    InRange = true, CooldownRemainingMs = cooldownMs,
+                    Id = "1001",
+                    Available = true,
+                    Usable = true,
+                    InRange = true,
+                    CooldownRemainingMs = cooldownMs,
                 },
             },
         };
@@ -283,13 +302,18 @@ public sealed class ReplayIntegrationTests : IDisposable
             Enabled = true,
             Character = new CharacterRequirements
             {
-                Calling = "Warrior", MinimumLevel = 1, MaximumLevel = 60,
+                Calling = "Warrior",
+                MinimumLevel = 1,
+                MaximumLevel = 60,
             },
             Abilities = new Dictionary<string, AbilityBinding>(StringComparer.OrdinalIgnoreCase)
             {
                 ["fireball"] = new AbilityBinding
                 {
-                    AbilityId = "1001", Key = "1", Enabled = true, Required = true,
+                    AbilityId = "1001",
+                    Key = "1",
+                    Enabled = true,
+                    Required = true,
                 },
             },
             Rules = new List<CombatRule>
@@ -314,13 +338,17 @@ public sealed class ReplayIntegrationTests : IDisposable
             Enabled = true,
             Character = new CharacterRequirements
             {
-                Calling = "Mage", MinimumLevel = 1, MaximumLevel = 60,
+                Calling = "Mage",
+                MinimumLevel = 1,
+                MaximumLevel = 60,
             },
             Abilities = new Dictionary<string, AbilityBinding>(StringComparer.OrdinalIgnoreCase)
             {
                 ["fireball"] = new AbilityBinding
                 {
-                    AbilityId = "1001", Key = "1", Enabled = true,
+                    AbilityId = "1001",
+                    Key = "1",
+                    Enabled = true,
                 },
             },
             Rules = new List<CombatRule>
