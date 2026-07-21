@@ -4,6 +4,7 @@
 
 - .NET 10 SDK (`global.json` pins `10.0.204`)
 - RIFT client installed; shell **MyDocuments** RIFT AddOns tree (OneDrive on this machine — see `docs/rift-local-paths.md`)
+- Git clone default branch is **`main`** (`https://github.com/360madden/bot-ds`)
 
 ## Verify offline
 

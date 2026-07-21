@@ -1,8 +1,8 @@
 # Implementation Handoff
 
-Last updated: **2026-07-21k** (authoritative resume snapshot)
+Last updated: **2026-07-21l** (branch `main`; authoritative resume snapshot)
 
-**Repo:** `C:\work\bot-ds` · **Branch:** `master` (tracks `origin/main`) · **Remote:** https://github.com/360madden/bot-ds · **HEAD:** `d9ba86f`
+**Repo:** `C:\work\bot-ds` · **Branch:** `main` (tracks `origin/main`) · **Remote:** https://github.com/360madden/bot-ds · **HEAD:** `559d7c0`
 
 ## Resume in one paragraph
 

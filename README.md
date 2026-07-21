@@ -4,6 +4,8 @@ Personal, local combat-only bot for Gamigo's RIFT MMO. The intended data path is
 
 Project direction is defined by the [formal implementation plan](PLAN.md) and [formal roadmap](ROADMAP.md).
 
+**Source:** [github.com/360madden/bot-ds](https://github.com/360madden/bot-ds) · default branch **`main`**.
+
 ## Architecture
 
 ```
