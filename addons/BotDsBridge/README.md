@@ -4,13 +4,32 @@ RIFT Lua addon that emits the V5 telemetry double-buffer into process memory for
 
 ## Install Location
 
-Copy the `BotDsBridge` folder into the RIFT addons directory:
+**Durable fact:** `docs/rift-local-paths.md` and `BotDs.Core.RiftLocalPaths`.
+
+Preferred deploy (resolves OneDrive MyDocuments correctly):
+
+```bat
+deploy-addon.cmd
+```
+
+Manual target (must equal shell MyDocuments):
 
 ```
-<RIFT install>\Interface\Addons\BotDsBridge\
+{Environment.SpecialFolder.MyDocuments}\RIFT\Interface\AddOns\BotDsBridge\
 ```
+
+On this machine that is:
+
+```
+C:\Users\mrkoo\OneDrive\Documents\RIFT\Interface\AddOns\BotDsBridge\
+```
+
+**Do not** use non-redirected `%USERPROFILE%\Documents\...` or Glyph `Live\Interface\Addons` as the primary path.  
+**Verify** the parent `AddOns` folder already contains other player addons (JAB, ReaderBridge, …).
 
 The folder must contain `RiftAddon.toc` and `main.lua`. `RiftAddon.toc` declares `main.lua` in its `RunOnStartup` list.
+
+**TOC must include non-empty `Identifier`, `Name`, and `Email`.** Empty `Email = ""` means the addon **does not appear** in the RIFT AddOns list at all.
 
 ## Current Status
 

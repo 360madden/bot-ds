@@ -49,6 +49,25 @@ Each rule references an ability alias and declares conditions in `when`. Rules a
 
 `disabled-warrior-45.json` is a placeholder profile for a level-45 Warrior. It is **disabled** and contains only a placeholder binding with empty abilityId/key. It demonstrates the profile format without being arming-capable. Do not treat it as a working combat profile.
 
+## Draft From Live Telemetry
+
+With BotDs running and a Healthy provider that has ability inventory:
+
+```text
+POST http://localhost:5068/api/profiles/draft-from-telemetry
+```
+
+Or use the dashboard **Draft profile from live** button.
+
+This writes `draft-{calling}-{level}-live.json` using **only** ability IDs observed in live telemetry, plus an optional `{id}.names.json` sidecar for display names. Profile stays `enabled: false`. If action-bar telemetry is known, keys may be **suggested** from slots 1–12 → common defaults `1`–`0`, `-`, `=` — **confirm in-game** before enabling. The tool never invents rotations or unobserved keys.
+
+Full ability inventory / bar:
+
+```text
+GET http://localhost:5068/api/abilities
+GET http://localhost:5068/api/action-bar
+```
+
 ## Verification
 
 ```bash

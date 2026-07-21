@@ -83,8 +83,20 @@ public sealed class CombatEvaluator(TimeSpan maximumTelemetryAge, TimeProvider? 
             }
         }
 
+        // Prefer an available target object (covers legacy fixtures without TargetKnownness).
+        // Explicit KnownNoTarget / Unknown still fail closed when no usable target is present.
         UnitState? target = frame.Target;
-        if (target is null || target.Health is null || !target.IsAvailable || target.Health.IsDead)
+        if (target is null || target.Health is null || !target.IsAvailable)
+        {
+            string waitMsg = frame.TargetKnownness switch
+            {
+                TargetKnownness.KnownNoTarget => "Waiting for a live selected target.",
+                TargetKnownness.Unknown => "Target state is unknown.",
+                _ => "Waiting for a live selected target.",
+            };
+            return new EvaluationResult(ControllerState.WaitingForTarget, null, [], Message: waitMsg);
+        }
+        if (target.Health.IsDead)
             return new EvaluationResult(ControllerState.WaitingForTarget, null, [], Message: "Waiting for a live selected target.");
         if (!target.IsHostile)
             return new EvaluationResult(ControllerState.WaitingForTarget, null, [], Message: "Selected target is not hostile.");

@@ -2,8 +2,9 @@ Identifier = "BotDsBridge"
 Name = "BotDs Bridge"
 Description = "V5 telemetry protocol emitter for BotDs combat reader"
 Author = "BotDs"
-Version = "0.1.0"
-Email = ""
+Email = "botds@localhost"
+Version = "0.2.0"
+Environment = "4.4"
 SavedVariables = {
     BotDsDebug = "character",
 }

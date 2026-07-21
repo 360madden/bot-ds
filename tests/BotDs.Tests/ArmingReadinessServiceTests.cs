@@ -39,6 +39,24 @@ public sealed class ArmingReadinessServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task No_active_profile_still_reports_live_telemetry_frame()
+    {
+        // Dashboard readiness should surface provider/player diagnostics even when
+        // no profile is selected (operator is mid-setup).
+        var publisher = new SnapshotPublisher();
+        publisher.Publish(HealthyFrame());
+        var profiles = await CreateProfileService(null);
+        var svc = new ArmingReadinessService(publisher, profiles);
+
+        var result = svc.Evaluate(MaxAge);
+        Assert.False(result.CanArm);
+        Assert.Contains(result.Blockers, b => b.Contains("No active profile"));
+        Assert.NotNull(result.Frame);
+        Assert.Equal(ProviderHealth.Healthy, result.Frame!.Provider.Health);
+        Assert.NotNull(result.Frame.Player);
+    }
+
+    [Fact]
     public async Task Disabled_profile_blocks_arming()
     {
         var publisher = new SnapshotPublisher();
@@ -99,7 +117,11 @@ public sealed class ArmingReadinessServiceTests : IDisposable
     public async Task No_target_blocks_arming()
     {
         var publisher = new SnapshotPublisher();
-        var noTarget = HealthyFrame() with { Target = null };
+        var noTarget = HealthyFrame() with
+        {
+            Target = null,
+            TargetKnownness = TargetKnownness.KnownNoTarget,
+        };
         publisher.Publish(noTarget);
         WriteProfileFile("test-profile", CreateValidProfileJson());
         var profiles = await CreateProfileService("test-profile");

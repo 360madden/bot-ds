@@ -1,198 +1,120 @@
 using System.Net;
 using BotDs.App.Services;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace BotDs.Tests;
 
+/// <summary>
+/// Loopback-only API gate tests. Token auth was removed (personal local tool).
+/// </summary>
 public sealed class DashboardSecurityMiddlewareTests
 {
-    private const string ApiToken = "test-api-token";
-    private const string ControlToken = "test-control-token";
-
     [Fact]
     public async Task RemoteIp_RejectsNonLoopback()
     {
-        var context = CreateHttpContext(
-            path: "/api/status",
-            remoteIp: IPAddress.Parse("192.168.1.100"),
-            bearerToken: ApiToken);
-
-        var middleware = CreateMiddleware();
-        await middleware.InvokeAsync(context);
-
+        var context = CreateHttpContext(path: "/api/status", remoteIp: IPAddress.Parse("192.168.1.100"));
+        await CreateMiddleware().InvokeAsync(context);
         Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
     }
 
     [Fact]
     public async Task NullRemoteIp_Rejected()
     {
-        var context = CreateHttpContext(
-            path: "/api/status",
-            remoteIp: null,
-            bearerToken: ApiToken);
-
-        var middleware = CreateMiddleware();
-        await middleware.InvokeAsync(context);
-
+        var context = CreateHttpContext(path: "/api/status", remoteIp: null);
+        await CreateMiddleware().InvokeAsync(context);
         Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
     }
 
     [Fact]
     public async Task NonLocalHostHeader_Rejected()
     {
-        var context = CreateHttpContext(
-            path: "/api/status",
-            remoteIp: IPAddress.Loopback,
-            bearerToken: ApiToken,
-            host: "example.test");
-
+        var context = CreateHttpContext(path: "/api/status", remoteIp: IPAddress.Loopback, host: "example.test");
         await CreateMiddleware().InvokeAsync(context);
-
         Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
     }
 
     [Fact]
     public async Task CrossOriginRequest_Rejected()
     {
-        var context = CreateHttpContext(
-            path: "/api/status",
-            remoteIp: IPAddress.Loopback,
-            bearerToken: ApiToken);
+        var context = CreateHttpContext(path: "/api/status", remoteIp: IPAddress.Loopback);
         context.Request.Headers.Origin = "http://localhost:5001";
-
         await CreateMiddleware().InvokeAsync(context);
-
         Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
     }
 
     [Fact]
-    public async Task LocalApi_AcceptsValidApiToken()
+    public async Task LocalApi_AllowedWithoutToken()
     {
         bool nextCalled = false;
-        var context = CreateHttpContext(
-            path: "/api/status",
-            remoteIp: IPAddress.Loopback,
-            bearerToken: ApiToken);
-
+        var context = CreateHttpContext(path: "/api/status", remoteIp: IPAddress.Loopback);
         var middleware = CreateMiddleware(next: _ => { nextCalled = true; return Task.CompletedTask; });
         await middleware.InvokeAsync(context);
-
         Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
         Assert.True(nextCalled);
     }
 
     [Fact]
-    public async Task ReloadEndpoint_RejectsApiToken()
-    {
-        var context = CreateHttpContext(
-            path: "/api/profiles/reload",
-            method: "POST",
-            remoteIp: IPAddress.Loopback,
-            bearerToken: ApiToken);
-
-        var middleware = CreateMiddleware();
-        await middleware.InvokeAsync(context);
-
-        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
-    }
-
-    [Fact]
-    public async Task ControlEndpoint_RejectsApiToken()
-    {
-        var context = CreateHttpContext(
-            path: "/api/control/arm",
-            method: "POST",
-            remoteIp: IPAddress.Loopback,
-            bearerToken: ApiToken);
-
-        await CreateMiddleware().InvokeAsync(context);
-
-        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
-    }
-
-    [Fact]
-    public async Task ReloadEndpoint_AcceptsControlToken()
+    public async Task LocalControl_AllowedWithoutToken()
     {
         bool nextCalled = false;
-        var context = CreateHttpContext(
-            path: "/api/profiles/reload",
-            method: "POST",
-            remoteIp: IPAddress.Loopback,
-            bearerToken: ControlToken);
-
+        var context = CreateHttpContext(path: "/api/control/arm", method: "POST", remoteIp: IPAddress.Loopback);
         var middleware = CreateMiddleware(next: _ => { nextCalled = true; return Task.CompletedTask; });
         await middleware.InvokeAsync(context);
-
         Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
         Assert.True(nextCalled);
     }
 
     [Fact]
-    public async Task EmptyToken_FailClosed()
+    public async Task LocalProfileReload_AllowedWithoutToken()
     {
-        var context = CreateHttpContext(
-            path: "/api/status",
-            remoteIp: IPAddress.Loopback,
-            bearerToken: null);
-
-        var middleware = CreateMiddleware();
+        bool nextCalled = false;
+        var context = CreateHttpContext(path: "/api/profiles/reload", method: "POST", remoteIp: IPAddress.Loopback);
+        var middleware = CreateMiddleware(next: _ => { nextCalled = true; return Task.CompletedTask; });
         await middleware.InvokeAsync(context);
-
-        Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.True(nextCalled);
     }
 
     [Fact]
-    public async Task IPv4MappedLoopback_Accepted()
+    public async Task NonApiPath_BypassesChecks()
     {
         bool nextCalled = false;
-        var context = CreateHttpContext(
-            path: "/api/status",
-            remoteIp: IPAddress.Parse("::ffff:127.0.0.1"),
-            bearerToken: ApiToken);
-
+        var context = CreateHttpContext(path: "/", remoteIp: IPAddress.Parse("8.8.8.8"));
         var middleware = CreateMiddleware(next: _ => { nextCalled = true; return Task.CompletedTask; });
         await middleware.InvokeAsync(context);
+        Assert.True(nextCalled);
+    }
 
-        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+    [Fact]
+    public async Task IPv6Loopback_Allowed()
+    {
+        bool nextCalled = false;
+        var context = CreateHttpContext(path: "/api/status", remoteIp: IPAddress.IPv6Loopback, host: "localhost");
+        var middleware = CreateMiddleware(next: _ => { nextCalled = true; return Task.CompletedTask; });
+        await middleware.InvokeAsync(context);
         Assert.True(nextCalled);
     }
 
     private static DashboardSecurityMiddleware CreateMiddleware(RequestDelegate? next = null)
     {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["BotDs:Dashboard:ApiToken"] = ApiToken,
-                ["BotDs:Dashboard:ControlToken"] = ControlToken,
-            })
-            .Build();
-
-        return new DashboardSecurityMiddleware(
-            next ?? (_ => Task.CompletedTask),
-            config,
-            NullLogger<DashboardSecurityMiddleware>.Instance);
+        next ??= _ => Task.CompletedTask;
+        return new DashboardSecurityMiddleware(next, NullLogger<DashboardSecurityMiddleware>.Instance);
     }
 
     private static DefaultHttpContext CreateHttpContext(
         string path,
+        IPAddress? remoteIp,
         string method = "GET",
-        IPAddress? remoteIp = null,
-        string? bearerToken = null,
-        string? host = "localhost",
-        int port = 5000)
+        string host = "localhost")
     {
         var context = new DefaultHttpContext();
-        context.Request.Path = path;
         context.Request.Method = method;
-        context.Request.Host = new HostString($"{host}:{port}");
+        context.Request.Path = path;
+        context.Request.Host = new HostString(host, 5068);
         context.Request.Scheme = "http";
         context.Connection.RemoteIpAddress = remoteIp;
-
-        if (bearerToken is not null)
-            context.Request.Headers.Authorization = $"Bearer {bearerToken}";
-
+        context.Response.Body = new MemoryStream();
         return context;
     }
 }

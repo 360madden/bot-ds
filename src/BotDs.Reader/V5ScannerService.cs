@@ -74,6 +74,15 @@ public sealed class V5ScannerService : IDisposable
     private long _smallWindowHits;
     private long _smallWindowMisses;
 
+    // Proactive refresh: Lua reassigns BotDsBridgeRegion on each materialize, leaving
+    // the prior immutable string valid-but-frozen at the cached address. If the
+    // sequence has not advanced for this long on a cache hit, search for a fresher copy
+    // before the full LocalMaxAge stale path.
+    private static readonly TimeSpan SequenceStagnationRefresh = TimeSpan.FromMilliseconds(180);
+    private uint _lastSeenSequence;
+    private long _lastSequenceAdvanceTimestamp;
+    private bool _hasSeenSequence;
+
     public V5ScannerService(ProcessSelector selector, TimeSpan localMaxAge,
         SentinelScannerOptions? scannerOptions = null, IMemoryReaderFactory? readerFactory = null,
         TimeProvider? timeProvider = null)
@@ -160,23 +169,44 @@ public sealed class V5ScannerService : IDisposable
                         // Process-loss race: recheck liveness; if dead, detach + Disconnected.
                         if (!_reader.CheckLiveness())
                         { DetachLocked(); return Fail(d, ProviderHealth.Disconnected, ReaderFailureCode.ProcessExit, "Process exited during scan", t0); }
-                        return Fail(d, ProviderHealth.Faulted, MapIncomplete(sr.IncompleteCause), "Scan incomplete", t0);
+
+                        // Lua immutable-string emitters leave many GC'd region copies in process
+                        // memory. Hitting MaxCandidates is common; still try SelectBest on the
+                        // ranked partial set rather than hard-failing the whole cycle.
+                        // Only for pure candidate/raw-match limits — never for read/process failures.
+                        if (IsLimitOnlyIncomplete(sr.IncompleteCause)
+                            && sr.Candidates.Count > 0
+                            && TrySelectCandidate(sr.Candidates, out V5Candidate? partialBest, allowMaxSeqFallback: true)
+                            && partialBest is not null)
+                        {
+                            cand = partialBest;
+                            _cachedAddr = cand.BaseAddress;
+                            _hasCached = true;
+                        }
+                        else
+                        {
+                            return Fail(d, ProviderHealth.Faulted, MapIncomplete(sr.IncompleteCause), "Scan incomplete", t0);
+                        }
                     }
-                    if (sr.Candidates.Count == 0)
+                    else if (sr.Candidates.Count == 0)
                     {
                         d.CacheMiss = 1;
                         if (sr.ExactSentinelMatches > 0) return Fail(d, ProviderHealth.Faulted, ReaderFailureCode.CandidateInvalid, "Slot invalid", t0);
                         return Fail(d, ProviderHealth.Disconnected, ReaderFailureCode.SentinelNotFound, "No sentinel", t0);
                     }
-
-                    var sel = V5FrameSelector.SelectBest(sr.Candidates, out V5Candidate? best);
-                    if (sel != V5SelectionResult.Selected || best is null)
+                    else
                     {
-                        d.CacheMiss = 1;
-                        var c = sel == V5SelectionResult.Ambiguous ? ReaderFailureCode.CandidateAmbiguous : ReaderFailureCode.CandidateInvalid;
-                        return Fail(d, ProviderHealth.Faulted, c, "Selection failed", t0);
+                        var completeSel = V5FrameSelector.SelectBest(sr.Candidates, out V5Candidate? best);
+                        if (completeSel != V5SelectionResult.Selected || best is null)
+                        {
+                            d.CacheMiss = 1;
+                            var code = completeSel == V5SelectionResult.Ambiguous
+                                ? ReaderFailureCode.CandidateAmbiguous
+                                : ReaderFailureCode.CandidateInvalid;
+                            return Fail(d, ProviderHealth.Faulted, code, "Selection failed", t0);
+                        }
+                        cand = best; _cachedAddr = cand.BaseAddress; _hasCached = true;
                     }
-                    cand = best; _cachedAddr = cand.BaseAddress; _hasCached = true;
                 }
 
                 ct.ThrowIfCancellationRequested();
@@ -185,6 +215,32 @@ public sealed class V5ScannerService : IDisposable
 
                 if (srr.TransportHealth == ProviderHealth.Disconnected)
                 { _hasCached = false; _cachedAddr = 0; d.CacheMiss = 1; return Fail(d, ProviderHealth.Faulted, ReaderFailureCode.InternalError, "Transport disconnect", t0); }
+
+                // Track sequence advances for proactive refresh of frozen GC copies.
+                NoteSequence(srr);
+
+                // Cache hit on a frozen Lua string: sequence stops advancing while a newer
+                // BotDsBridgeRegion lives elsewhere. Refresh before full LocalMaxAge stale.
+                if (usedCache
+                    && d.FullScan == 0
+                    && srr.TransportHealth is ProviderHealth.Healthy or ProviderHealth.Degraded
+                    && srr.Frame is not null
+                    && IsSequenceStagnant())
+                {
+                    V5Candidate? fresher = TryFindFresherCandidate(
+                        _reader, cand, srr.Frame.Header.Sequence, ct, ref d);
+                    if (fresher is not null && fresher.BaseAddress != cand.BaseAddress)
+                    {
+                        cand = fresher;
+                        _cachedAddr = cand.BaseAddress;
+                        _hasCached = true;
+                        usedCache = false;
+                        ct.ThrowIfCancellationRequested();
+                        srr = DoStableRead(cand);
+                        ct.ThrowIfCancellationRequested();
+                        NoteSequence(srr);
+                    }
+                }
 
                 if (srr.TransportHealth == ProviderHealth.Stale)
                 {
@@ -219,30 +275,55 @@ public sealed class V5ScannerService : IDisposable
                     d.Bytes += sr2.BytesScanned; d.RawMatch += sr2.RawMagicMatches; d.ExactSent += sr2.ExactSentinelMatches;
                     d.Candidates += sr2.Candidates.Count; d.ReadFails += sr2.ReadFailures; d.ScanDur += sr2.Duration;
 
+                    V5Candidate? reloCand = null;
                     if (sr2.Incomplete)
                     {
                         if ((sr2.IncompleteCause & (ScanIncompleteCause.RawMatchLimitExceeded | ScanIncompleteCause.CandidateLimitExceeded)) != 0)
                             d.CandidateLimit = 1;
                         if (!_reader.CheckLiveness())
                         { DetachLocked(); return Fail(d, ProviderHealth.Disconnected, ReaderFailureCode.ProcessExit, "Process exited during relo scan", t0); }
-                        return Fail(d, ProviderHealth.Faulted, MapIncomplete(sr2.IncompleteCause), "Relo incomplete", t0);
+                        if (IsLimitOnlyIncomplete(sr2.IncompleteCause)
+                            && sr2.Candidates.Count > 0
+                            && TrySelectCandidate(sr2.Candidates, out reloCand, allowMaxSeqFallback: true)
+                            && reloCand is not null)
+                        {
+                            // limit-capped partial recovery — continue with reloCand
+                        }
+                        else if (IsLimitOnlyIncomplete(sr2.IncompleteCause) && srr.Frame is not null)
+                        {
+                            // Cap hit with no usable pick: keep last stale observation, not blank Faulted.
+                            return StaleDiagnostic(d, srr, t0);
+                        }
+                        else
+                        {
+                            // Query/read failures stay hard-faulted.
+                            return Fail(d, ProviderHealth.Faulted, MapIncomplete(sr2.IncompleteCause), "Relo incomplete", t0);
+                        }
                     }
-                    if (sr2.Candidates.Count == 0)
+                    else if (sr2.Candidates.Count == 0)
                     {
                         if (sr2.ExactSentinelMatches > 0) return Fail(d, ProviderHealth.Faulted, ReaderFailureCode.CandidateInvalid, "Relo slot invalid", t0);
                         return Fail(d, ProviderHealth.Disconnected, ReaderFailureCode.SentinelNotFound, "Relo no sentinel", t0);
                     }
-
-                    var sel2 = V5FrameSelector.SelectBest(sr2.Candidates, out V5Candidate? relo);
-                    if (sel2 != V5SelectionResult.Selected || relo is null)
+                    else
                     {
-                        var c2 = sel2 == V5SelectionResult.Ambiguous ? ReaderFailureCode.CandidateAmbiguous : ReaderFailureCode.CandidateInvalid;
-                        return Fail(d, ProviderHealth.Faulted, c2, "Relo selection failed", t0);
+                        var reloSel = V5FrameSelector.SelectBest(sr2.Candidates, out reloCand);
+                        if (reloSel != V5SelectionResult.Selected || reloCand is null)
+                        {
+                            var code = reloSel == V5SelectionResult.Ambiguous
+                                ? ReaderFailureCode.CandidateAmbiguous
+                                : ReaderFailureCode.CandidateInvalid;
+                            return Fail(d, ProviderHealth.Faulted, code, "Relo selection failed", t0);
+                        }
                     }
-                    cand = relo; _cachedAddr = cand.BaseAddress; _hasCached = true;
+
+                    cand = reloCand;
+                    _cachedAddr = cand.BaseAddress;
+                    _hasCached = true;
                     ct.ThrowIfCancellationRequested();
                     srr = DoStableRead(cand);
                     ct.ThrowIfCancellationRequested();
+                    NoteSequence(srr);
                 }
 
                 if (srr.TransportHealth == ProviderHealth.Disconnected)
@@ -290,6 +371,58 @@ public sealed class V5ScannerService : IDisposable
             s => { _reader!.ReadExact(c.BaseAddress + V5Constants.BufferAOffset, la, V5Constants.BufferSlotSize); la.CopyTo(s); },
             s => { _reader!.ReadExact(c.BaseAddress + V5Constants.BufferBOffset, lb, V5Constants.BufferSlotSize); lb.CopyTo(s); },
             _timeProvider.GetUtcNow());
+    }
+
+    private void NoteSequence(StableReadResult srr)
+    {
+        if (srr.Frame is null) return;
+        uint seq = srr.Frame.Header.Sequence;
+        if (!_hasSeenSequence || seq != _lastSeenSequence)
+        {
+            _lastSeenSequence = seq;
+            _lastSequenceAdvanceTimestamp = _timeProvider.GetTimestamp();
+            _hasSeenSequence = true;
+        }
+    }
+
+    private bool IsSequenceStagnant()
+    {
+        if (!_hasSeenSequence) return false;
+        TimeSpan elapsed = _timeProvider.GetElapsedTime(_lastSequenceAdvanceTimestamp);
+        return elapsed >= SequenceStagnationRefresh;
+    }
+
+    /// <summary>
+    /// Cheap proactive search for a higher-sequence region near the cached address.
+    /// Intentionally does <em>not</em> full-scan: full process scans are reserved for
+    /// the stale path so a 180 ms stagnation check cannot stall the read loop for seconds.
+    /// </summary>
+    private V5Candidate? TryFindFresherCandidate(
+        IMemoryReader reader,
+        V5Candidate current,
+        uint minSequence,
+        CancellationToken ct,
+        ref MetricDeltas d)
+    {
+        static uint RepSeq(V5Candidate c)
+        {
+            var sel = V5FrameSelector.Select(c.FrameA, c.FrameB, out var f);
+            if (sel is not (V5SelectionResult.Selected or V5SelectionResult.Equivalent) || f is null)
+                return 0;
+            return f.Header.Sequence;
+        }
+
+        V5Candidate? window = TrySmallWindowRescan(reader, current.BaseAddress, ct);
+        if (window is not null && RepSeq(window) > minSequence)
+        {
+            d.WindowHits = 1;
+            _smallWindowHits++;
+            return window;
+        }
+
+        d.WindowMisses = 1;
+        _smallWindowMisses++;
+        return null;
     }
 
     /// <summary>
@@ -389,6 +522,55 @@ public sealed class V5ScannerService : IDisposable
         return ReaderFailureCode.InternalError;
     }
 
+    private static bool IsLimitOnlyIncomplete(ScanIncompleteCause c)
+    {
+        const ScanIncompleteCause limits =
+            ScanIncompleteCause.RawMatchLimitExceeded | ScanIncompleteCause.CandidateLimitExceeded;
+        return c != ScanIncompleteCause.None
+            && (c & limits) != 0
+            && (c & ~limits) == 0;
+    }
+
+    /// <summary>
+    /// Prefer SelectBest. When <paramref name="allowMaxSeqFallback"/> is true (limit-capped
+    /// scans only), fall back to highest sequence among valid candidates so GC'd Lua region
+    /// copies do not permanently fault the provider.
+    /// </summary>
+    private static bool TrySelectCandidate(
+        IReadOnlyList<V5Candidate> candidates,
+        out V5Candidate? selected,
+        bool allowMaxSeqFallback = false)
+    {
+        var sel = V5FrameSelector.SelectBest(candidates, out selected);
+        if (sel == V5SelectionResult.Selected && selected is not null)
+            return true;
+
+        if (!allowMaxSeqFallback)
+            return false;
+
+        V5Candidate? best = null;
+        uint bestSeq = 0;
+        uint bestProd = 0;
+        foreach (var c in candidates)
+        {
+            if (!c.IsValid) continue;
+            var own = V5FrameSelector.Select(c.FrameA, c.FrameB, out var f);
+            if (own is not (V5SelectionResult.Selected or V5SelectionResult.Equivalent) || f is null)
+                continue;
+            uint seq = f.Header.Sequence;
+            uint prod = f.Header.ProducerFrameMs;
+            if (best is null || seq > bestSeq || (seq == bestSeq && prod >= bestProd))
+            {
+                best = c;
+                bestSeq = seq;
+                bestProd = prod;
+            }
+        }
+
+        selected = best;
+        return selected is not null;
+    }
+
     private bool EnsureAttachedLocked()
     {
         if (_reader is not null && _reader.CheckLiveness()) return true;
@@ -483,6 +665,9 @@ public sealed class V5ScannerService : IDisposable
     {
         var r = _reader; _reader = null; _attachPid = 0; _stableReader?.Reset();
         _hasCached = false; _cachedAddr = 0;
+        _hasSeenSequence = false;
+        _lastSeenSequence = 0;
+        _lastSequenceAdvanceTimestamp = 0;
         ResetStaleBackoff();
         r?.Dispose();
     }

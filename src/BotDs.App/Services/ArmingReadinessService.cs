@@ -37,39 +37,40 @@ public sealed class ArmingReadinessService
         if (profile is null)
         {
             blockers.Add("No active profile selected.");
-            return new ReadinessResult(false, blockers, warnings, null, null);
         }
-
-        if (!profile.Enabled)
+        else
         {
-            blockers.Add("Active profile is disabled.");
-        }
-
-        if (profile.Abilities is null || !profile.Abilities.Values.Any(b => b is { Enabled: true }))
-        {
-            blockers.Add("Profile has no enabled ability bindings.");
-        }
-
-        if (profile.Rules is null || !profile.Rules.Any(r => r is { Enabled: true }))
-        {
-            blockers.Add("Profile has no enabled combat rules.");
-        }
-
-        // Check that at least one enabled rule references an enabled binding
-        if (profile.Abilities is not null && profile.Rules is not null)
-        {
-            bool hasActionableRule = profile.Rules
-                .Where(r => r is { Enabled: true })
-                .Any(r => !string.IsNullOrWhiteSpace(r.Ability)
-                    && profile.Abilities.TryGetValue(r.Ability, out var b)
-                    && b is { Enabled: true });
-            if (!hasActionableRule)
+            if (!profile.Enabled)
             {
-                blockers.Add("No enabled rule references an enabled ability binding.");
+                blockers.Add("Active profile is disabled.");
+            }
+
+            if (profile.Abilities is null || !profile.Abilities.Values.Any(b => b is { Enabled: true }))
+            {
+                blockers.Add("Profile has no enabled ability bindings.");
+            }
+
+            if (profile.Rules is null || !profile.Rules.Any(r => r is { Enabled: true }))
+            {
+                blockers.Add("Profile has no enabled combat rules.");
+            }
+
+            // Check that at least one enabled rule references an enabled binding
+            if (profile.Abilities is not null && profile.Rules is not null)
+            {
+                bool hasActionableRule = profile.Rules
+                    .Where(r => r is { Enabled: true })
+                    .Any(r => !string.IsNullOrWhiteSpace(r.Ability)
+                        && profile.Abilities.TryGetValue(r.Ability, out var b)
+                        && b is { Enabled: true });
+                if (!hasActionableRule)
+                {
+                    blockers.Add("No enabled rule references an enabled ability binding.");
+                }
             }
         }
 
-        // ── Provider checks ─────────────────────────────────
+        // ── Provider checks (always evaluate — even without a profile) ──
         var provider = frame.Provider;
         if (provider is null)
         {
@@ -100,8 +101,8 @@ public sealed class ArmingReadinessService
             if (player.Level is null)
                 blockers.Add("Player level is unknown.");
 
-            // Progresssion matching
-            if (profile.Character is not null && player.Level is not null)
+            // Progression matching (profile optional)
+            if (profile?.Character is not null && player.Level is not null)
             {
                 if (profile.Character.MinimumLevel.HasValue && player.Level < profile.Character.MinimumLevel)
                     blockers.Add($"Player level {player.Level} is below profile minimum {profile.Character.MinimumLevel}.");
@@ -110,7 +111,7 @@ public sealed class ArmingReadinessService
             }
 
             // Calling match
-            if (profile.Character?.Calling is not null
+            if (profile?.Character?.Calling is not null
                 && !string.Equals(profile.Character.Calling, player.Calling, StringComparison.OrdinalIgnoreCase))
             {
                 blockers.Add($"Profile calling '{profile.Character.Calling}' does not match player '{player.Calling}'.");
@@ -125,17 +126,31 @@ public sealed class ArmingReadinessService
 
         // ── Target checks ───────────────────────────────────
         var target = frame.Target;
-        if (target is null || !target.IsAvailable)
-        {
-            blockers.Add("No live target selected.");
-        }
-        else
+        if (target is not null && target.IsAvailable)
         {
             if (!target.IsHostile)
                 blockers.Add("Selected target is not hostile.");
             if (target.Health.IsDead)
                 blockers.Add("Selected target is dead.");
         }
+        else if (frame.TargetKnownness is TargetKnownness.KnownNoTarget)
+        {
+            blockers.Add("No live target selected.");
+        }
+        else if (frame.TargetKnownness is TargetKnownness.Unknown)
+        {
+            blockers.Add("Target state is unknown (inspection incomplete).");
+        }
+        else
+        {
+            blockers.Add("No live target selected.");
+        }
+
+        // ── Game input readiness (M2) ───────────────────────
+        if (frame.GameInputReady is false)
+            blockers.Add("Game input is not ready (chat/edit focus or blocked UI context).");
+        else if (frame.GameInputReady is null)
+            warnings.Add(new ArmingWarning("Game input readiness is unknown."));
 
         // ── Ability inventory checks ────────────────────────
         if (!frame.IsAbilitiesKnown)
@@ -143,8 +158,8 @@ public sealed class ArmingReadinessService
             warnings.Add(new ArmingWarning("Ability inventory is unknown — ability conditions may not evaluate."));
         }
 
-        // Required ability reconciliation — ensure all required enabled bindings are present
-        if (profile.Abilities is not null && frame.Abilities is not null)
+        // Required ability reconciliation — only when a profile is active
+        if (profile?.Abilities is not null && frame.Abilities is not null)
         {
             int playerLevel = player?.Level ?? 0;
             foreach ((string alias, AbilityBinding binding) in profile.Abilities)

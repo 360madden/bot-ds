@@ -1,3 +1,4 @@
+using System.Text;
 using BotDs.Core;
 using BotDs.Reader.V5;
 
@@ -160,7 +161,7 @@ public sealed class V5ParserTests
         sectionData.AddRange(BitConverter.GetBytes((ushort)0));
         // ClientVersion: 0 bytes
         // SchemaVersion: 1 byte
-        sectionData.Add(1);
+        sectionData.Add(V5Constants.SchemaVersionCurrent);
         // Reserved: 1 byte
         sectionData.Add(0);
 
@@ -189,12 +190,12 @@ public sealed class V5ParserTests
     {
         byte[] slot = CreateMinimalSlot();
 
-        // Build abilities section: count(2) + records(count * 46)
+        // Build abilities section: count(2) + records(count * AbilityRecordSize)
         ushort count = 1;
         List<byte> sectionData = [];
         sectionData.AddRange(BitConverter.GetBytes(count));
 
-        // One ability record (46 bytes)
+        // One ability record (schema v2, 80 bytes)
         byte[] record = new byte[V5Constants.AbilityRecordSize];
         // AbilityId at offset 0 (32 bytes)
         "test_ability_01"u8.CopyTo(record.AsSpan(0));
@@ -211,6 +212,10 @@ public sealed class V5ParserTests
         record[44] = V5Constants.AbilityFlagAvailable | V5Constants.AbilityFlagUsable | V5Constants.AbilityFlagInRange;
         // ResourceCost at offset 45
         record[45] = 5;
+        // NameLength + Name at 46
+        const string abilityName = "Test Ability";
+        BitConverter.TryWriteBytes(record.AsSpan(46), (ushort)abilityName.Length);
+        Encoding.UTF8.GetBytes(abilityName).CopyTo(record.AsSpan(48));
 
         sectionData.AddRange(record);
 
@@ -232,6 +237,7 @@ public sealed class V5ParserTests
         Assert.True(result.Frame.Abilities[0].Available);
         Assert.True(result.Frame.Abilities[0].Usable);
         Assert.Equal(5, result.Frame.Abilities[0].ResourceCost);
+        Assert.Equal("Test Ability", result.Frame.Abilities[0].Name);
     }
 
     [Fact]
@@ -433,10 +439,11 @@ public sealed class V5ParserTests
     public void Parse_AbilitiesTooLong_ReturnsSectionPayloadLengthMismatch()
     {
         byte[] slot = CreateMinimalSlot();
-        // count=1 → expected 2+46=48 bytes, give 49
-        byte[] data = new byte[49];
+        // count=1 → expected 2+AbilityRecordSize, give one extra byte
+        int expected = 2 + V5Constants.AbilityRecordSize;
+        byte[] data = new byte[expected + 1];
         BitConverter.TryWriteBytes(data, (ushort)1);
-        data[48] = 0xBB;
+        data[expected] = 0xBB;
 
         WriteSection(slot, V5Constants.SectionTypeAbilities, data);
         int payloadLength = V5Constants.SectionHeaderSize + data.Length;
@@ -638,7 +645,7 @@ public sealed class V5ParserTests
         data.AddRange(BitConverter.GetBytes(producerFrameMs));
         data.AddRange(BitConverter.GetBytes(500u));
         data.AddRange(BitConverter.GetBytes((ushort)0));
-        data.Add(1);  // schema
+        data.Add(V5Constants.SchemaVersionCurrent);  // schema
         data.Add(0);  // reserved
         return [.. data];
     }
@@ -802,7 +809,8 @@ public sealed class V5HealthMapperTests
         var parsed = new ParsedAbilityState(
             "test_ability", 0, 5000, -1,
             Flags: V5Constants.AbilityFlagAvailable, // only Available set
-            ResourceCost: 0);
+            ResourceCost: 0,
+            Name: "Test Ability");
 
         AbilityState state = InvokeToAbilityState(parsed);
 
@@ -811,6 +819,9 @@ public sealed class V5HealthMapperTests
         Assert.False(state.InRange);
         Assert.False(state.IsChannel);
         Assert.False(state.IsPassive);
+        Assert.Equal("Test Ability", state.Name);
+        Assert.Equal(0, state.CooldownRemainingMilliseconds);
+        Assert.Equal(5000, state.CooldownDurationMilliseconds);
     }
 
     /// <summary>
@@ -1619,7 +1630,7 @@ public sealed class StableReaderTests
         (sessionId ?? TestSessionId).TryWriteBytes(provider);
         BitConverter.TryWriteBytes(provider.AsSpan(16), producerFrameMs);
         BitConverter.TryWriteBytes(provider.AsSpan(20), 500u);
-        provider[26] = 1;
+        provider[26] = V5Constants.SchemaVersionCurrent;
 
         int payloadOffset = V5Constants.PayloadOffset;
         BitConverter.TryWriteBytes(slot.AsSpan(payloadOffset), (ushort)V5Constants.SectionTypeProviderInfo);

@@ -108,8 +108,12 @@ public sealed class ProfileService
 
         foreach (string file in files)
         {
-            ProfileValidationResult result = await CombatProfileLoader.LoadAsync(file, ct);
             string fileName = Path.GetFileName(file);
+            // Sidecar authoring maps (e.g. draft-*.names.json) are not combat profiles.
+            if (fileName.EndsWith(".names.json", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            ProfileValidationResult result = await CombatProfileLoader.LoadAsync(file, ct);
 
             if (result.IsValid && result.Profile is not null)
             {

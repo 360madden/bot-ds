@@ -1,5 +1,6 @@
 using BotDs.App.Endpoints;
 using BotDs.App.Services;
+using BotDs.Core;
 using BotDs.Input;
 using BotDs.Reader;
 using Serilog;
@@ -31,8 +32,10 @@ try
             flushToDiskInterval: TimeSpan.FromSeconds(1)));
 
     builder.Services.AddSingleton<SnapshotPublisher>();
+    builder.Services.AddSingleton<ITelemetrySource, SnapshotTelemetrySource>();
     builder.Services.AddSingleton<ProfileService>();
     builder.Services.AddSingleton<ControllerStateMachine>();
+    builder.Services.AddSingleton<BindingVerificationTracker>();
     builder.Services.AddSingleton<EvaluatorLoop>();
     builder.Services.AddSingleton<ArmingReadinessService>();
     // ── Key sink: fake (dry-run) or Windows (live) ──────────
@@ -56,8 +59,26 @@ try
     {
         builder.Services.AddSingleton<IKeySink>(new FakeKeySink());
     }
+
+    // ── Emergency hotkey (M8) ────────────────────────────────
+    string emergencyHotkey = builder.Configuration.GetValue<string>("BotDs:Action:EmergencyHotkey")
+        ?? "Ctrl+Shift+F12";
+    bool useWindowsEmergencyHotkey = builder.Configuration.GetValue(
+        "BotDs:Action:UseWindowsEmergencyHotkey", true);
+    if (useWindowsEmergencyHotkey)
+    {
+        builder.Services.AddSingleton<IEmergencyHotkey>(new WindowsEmergencyHotkey(emergencyHotkey));
+        Log.Information("Windows emergency hotkey configured: {Binding}", emergencyHotkey);
+    }
+    else
+    {
+        builder.Services.AddSingleton<IEmergencyHotkey>(new FakeEmergencyHotkey(emergencyHotkey));
+        Log.Information("Fake emergency hotkey configured: {Binding}", emergencyHotkey);
+    }
+
     builder.Services.AddSingleton<ActionCoordinator>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<EvaluatorLoop>());
+    builder.Services.AddHostedService<EmergencyHotkeyHostedService>();
 
     // ── Settings ─────────────────────────────────────────────
     string settingsPath = builder.Configuration.GetValue<string>("BotDs:Settings:FilePath")
@@ -117,13 +138,7 @@ try
         Log.Warning("Startup profile reload failed: {Errors}; continuing with empty cache",
             string.Join("; ", startupReload.Errors));
 
-    string? apiToken = builder.Configuration.GetValue<string>("BotDs:Dashboard:ApiToken");
-    string? controlToken = builder.Configuration.GetValue<string>("BotDs:Dashboard:ControlToken");
-
-    if (string.IsNullOrWhiteSpace(apiToken))
-        Log.Warning("BotDs:Dashboard:ApiToken is not configured; read API access is disabled");
-    if (string.IsNullOrWhiteSpace(controlToken))
-        Log.Warning("BotDs:Dashboard:ControlToken is not configured; control operations are disabled");
+    Log.Information("Dashboard API is loopback-only (no token auth)");
 
     if (selector.IsValid)
         Log.Information("Scanner configured: {Selector}", selector.ToString());

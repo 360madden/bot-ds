@@ -8,6 +8,9 @@
   const API_BASE = "";  // Same origin
   const SSE_ENDPOINT = "/api/events";
   const STATUS_ENDPOINT = "/api/status";
+  const ABILITIES_ENDPOINT = "/api/abilities";
+  const ACTION_BAR_ENDPOINT = "/api/action-bar";
+  const DRAFT_PROFILE_ENDPOINT = "/api/profiles/draft-from-telemetry";
   const PROFILES_ENDPOINT = "/api/profiles";
   const RELOAD_PROFILES_ENDPOINT = "/api/profiles/reload";
   const ARM_ENDPOINT = "/api/control/arm";
@@ -19,34 +22,9 @@
   const RECONNECT_BASE_MS = 1000;
   const RECONNECT_MAX_MS = 30000;
 
-  // ---- Token management ----
-  function getToken() {
-    try {
-      return sessionStorage.getItem("botds-token") || "";
-    } catch {
-      return "";
-    }
-  }
-
-  function setToken(token) {
-    try {
-      if (token) {
-        sessionStorage.setItem("botds-token", token);
-      } else {
-        sessionStorage.removeItem("botds-token");
-      }
-    } catch {
-      // sessionStorage unavailable (private browsing etc.) — silent ignore
-    }
-  }
-
-  // ---- Fetch wrapper with auth ----
+  // ---- Fetch wrapper (loopback-only API; no token auth) ----
   async function apiFetch(path, method, body) {
     const headers = {};
-    const token = getToken();
-    if (token) {
-      headers["Authorization"] = "Bearer " + token;
-    }
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
     }
@@ -74,9 +52,6 @@
   const $ = (id) => document.getElementById(id);
 
   // Top bar
-  const tokenForm = $("token-form");
-  const tokenInput = $("token-input");
-  const tokenClear = $("token-clear");
   const connLabel = $("conn-label");
 
   // Provider
@@ -369,6 +344,139 @@
       Faulted: "Faulted",
     };
     connLabel.textContent = map[health] || health || "Unknown";
+  }
+
+  // ---- Abilities + action bar (calibration) ----
+  function defaultKeyForSlot(slot) {
+    if (slot >= 1 && slot <= 9) return String(slot);
+    if (slot === 10) return "0";
+    if (slot === 11) return "-";
+    if (slot === 12) return "=";
+    return "—";
+  }
+
+  function formatCd(ms) {
+    if (ms == null) return "—";
+    if (ms <= 0) return "0";
+    if (ms < 1000) return ms + "ms";
+    return (ms / 1000).toFixed(1) + "s";
+  }
+
+  function renderAbilities(payload) {
+    var body = $("abilities-body");
+    var summary = $("abilities-summary");
+    if (!body) return;
+    if (!payload || !payload.isKnown) {
+      if (summary) summary.textContent = "Ability inventory unknown (provider not publishing).";
+      body.innerHTML = '<tr><td colspan="6" class="data-table__empty">No ability data</td></tr>';
+      return;
+    }
+    var list = payload.abilities || [];
+    var usable = 0, ready = 0, named = 0;
+    list.forEach(function (a) {
+      if (a.usable) usable++;
+      if (a.isReady) ready++;
+      if (a.nameKnown) named++;
+    });
+    if (summary) {
+      summary.textContent = list.length + " abilities · " + usable + " usable · " +
+        ready + " ready · " + named + " named · seq " + (payload.sequence != null ? payload.sequence : "—");
+    }
+    if (list.length === 0) {
+      body.innerHTML = '<tr><td colspan="6" class="data-table__empty">Known empty inventory</td></tr>';
+      return;
+    }
+    // Prefer named + available first for operator scanning
+    var sorted = list.slice().sort(function (a, b) {
+      var an = a.nameKnown ? 0 : 1;
+      var bn = b.nameKnown ? 0 : 1;
+      if (an !== bn) return an - bn;
+      var aa = a.available ? 0 : 1;
+      var ba = b.available ? 0 : 1;
+      if (aa !== ba) return aa - ba;
+      return String(a.name || a.id).localeCompare(String(b.name || b.id));
+    });
+    var html = "";
+    sorted.slice(0, 80).forEach(function (a) {
+      html += "<tr>" +
+        "<td>" + escapeHtml(a.name || a.id || "—") + "</td>" +
+        "<td class=\"mono\">" + escapeHtml(a.id || "—") + "</td>" +
+        "<td>" + (a.available ? "Y" : "n") + "</td>" +
+        "<td>" + (a.usable ? "Y" : "n") + "</td>" +
+        "<td class=\"mono\">" + formatCd(a.cooldownRemainingMilliseconds) + "</td>" +
+        "<td>" + (a.isReady ? "Y" : "n") + "</td>" +
+        "</tr>";
+    });
+    body.innerHTML = html;
+  }
+
+  function renderActionBar(payload) {
+    var body = $("action-bar-body");
+    var summary = $("action-bar-summary");
+    if (!body) return;
+    if (!payload || !payload.isKnown) {
+      if (summary) summary.textContent = "Action bar unknown (needs bridge 0.2.0 + /reloadui).";
+      body.innerHTML = '<tr><td colspan="3" class="data-table__empty">No bar data</td></tr>';
+      return;
+    }
+    var slots = payload.slots || [];
+    if (summary) {
+      summary.textContent = "Page " + (payload.page != null ? payload.page : "—") +
+        " · suggested keys are common defaults (confirm in-game)";
+    }
+    var html = "";
+    slots.forEach(function (s) {
+      var has = s.hasAbility || (s.abilityId && s.abilityId.trim());
+      html += "<tr>" +
+        "<td>" + (s.slot != null ? s.slot : "—") + "</td>" +
+        "<td class=\"mono\">" + defaultKeyForSlot(s.slot) + "</td>" +
+        "<td class=\"mono\">" + (has ? escapeHtml(s.abilityId) : "—") + "</td>" +
+        "</tr>";
+    });
+    body.innerHTML = html || '<tr><td colspan="3" class="data-table__empty">Empty bar</td></tr>';
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  var abilitiesRefreshBusy = false;
+  function refreshAbilitiesAndBar(forceLog) {
+    if (abilitiesRefreshBusy) return;
+    abilitiesRefreshBusy = true;
+    Promise.all([
+      apiFetch(ABILITIES_ENDPOINT).catch(function () { return null; }),
+      apiFetch(ACTION_BAR_ENDPOINT).catch(function () { return null; }),
+    ]).then(function (pair) {
+      renderAbilities(pair[0]);
+      renderActionBar(pair[1]);
+      if (forceLog && pair[0]) {
+        addLogEntry("info", "abilities", "Inventory " + (pair[0].count || 0) + " known=" + !!pair[0].isKnown);
+      }
+    }).finally(function () {
+      abilitiesRefreshBusy = false;
+    });
+  }
+
+  function draftProfileFromLive() {
+    var statusEl = $("abilities-status");
+    if (statusEl) statusEl.textContent = "Drafting…";
+    apiFetch(DRAFT_PROFILE_ENDPOINT, "POST", {})
+      .then(function (res) {
+        var msg = "Draft " + (res && res.id ? res.id : "ok") +
+          (res && res.keyHintsFromActionBar != null ? " (key hints: " + res.keyHintsFromActionBar + ")" : "");
+        if (statusEl) statusEl.textContent = msg;
+        addLogEntry("info", "profiles", msg);
+        return loadProfiles();
+      })
+      .catch(function (err) {
+        if (statusEl) statusEl.textContent = "Draft failed";
+        addLogEntry("error", "profiles", "Draft failed: " + err.message);
+      });
   }
 
   // ---- Full status update ----
@@ -738,12 +846,6 @@
   }
 
   async function connectSSE() {
-    // Do not open SSE when there is no token; fall back to polling only.
-    if (!getToken()) {
-      setSseState("disconnected");
-      return;
-    }
-
     if (sseAbortController) {
       sseAbortController.abort();
     }
@@ -755,8 +857,6 @@
     var reader = null;
     try {
       var headers = { "Accept": "text/event-stream" };
-      var token = getToken();
-      if (token) headers["Authorization"] = "Bearer " + token;
 
       var response = await fetch(SSE_ENDPOINT, {
         headers: headers,
@@ -825,8 +925,6 @@
 
   function scheduleSseRetry() {
     if (sseRetryTimer) return;
-    // Do not schedule retries when there is no token.
-    if (!getToken()) return;
     var delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, sseRetryCount), RECONNECT_MAX_MS);
     sseRetryCount++;
     sseRetryTimer = setTimeout(function () {
@@ -1003,27 +1101,6 @@
 
   // ---- Event wiring ----
   function init() {
-    // Token form
-    tokenForm.addEventListener("submit", function (e) {
-      e.preventDefault();
-      setToken(tokenInput.value.trim());
-      tokenInput.value = "";
-      addLogEntry("info", "auth", "Token updated");
-      reconnectAll();
-    });
-
-    tokenClear.addEventListener("click", function () {
-      setToken("");
-      tokenInput.value = "";
-      addLogEntry("info", "auth", "Token cleared");
-      reconnectAll();
-    });
-
-    // Pre-fill if exists
-    if (getToken()) {
-      tokenInput.placeholder = "•••••••• (token set)";
-    }
-
     // Arm dialog
     btnArm.addEventListener("click", openArmDialog);
 
@@ -1137,6 +1214,23 @@
     btnEditorClose.addEventListener("click", closeProfileEditor);
     btnSaveProfile.addEventListener("click", saveProfileEdit);
 
+    // Abilities / action bar calibration
+    var btnRefreshAbilities = $("btn-refresh-abilities");
+    var btnDraftProfile = $("btn-draft-profile");
+    if (btnRefreshAbilities) {
+      btnRefreshAbilities.addEventListener("click", function () {
+        refreshAbilitiesAndBar(true);
+      });
+    }
+    if (btnDraftProfile) {
+      btnDraftProfile.addEventListener("click", function () {
+        draftProfileFromLive();
+      });
+    }
+    // Poll inventory less often than status
+    setInterval(function () { refreshAbilitiesAndBar(false); }, 5000);
+    refreshAbilitiesAndBar(false);
+
     // Output mode
     btnSetOutputMode.addEventListener("click", setOutputMode);
 
@@ -1148,8 +1242,8 @@
     });
 
     // Initial load
-    addLogEntry("info", "system", "Dashboard loaded");
-    if (getToken()) loadSettings();
+    addLogEntry("info", "system", "Dashboard loaded (loopback API, no token)");
+    loadSettings();
     reconnectAll();
   }
 
@@ -1223,7 +1317,9 @@
     if (sseReader) {
       sseReader.cancel().catch(function () { });
     }
-    if (getToken()) loadSettings();
+    stopPolling();
+
+    loadSettings();
     loadProfiles();
     connectSSE();
     startPolling();

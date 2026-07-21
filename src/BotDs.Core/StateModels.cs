@@ -42,6 +42,7 @@ public enum StopReason
     LoadingOrZoning,
     ActionNotAcknowledged,
     RateLimited,
+    ExternalActionConflict,
     UnhandledError,
 }
 
@@ -148,6 +149,35 @@ public sealed record AuraState(
     int? RemainingMilliseconds,
     bool IsDebuff);
 
+/// <summary>
+/// Explicit selected-target knownness (M2 / PLAN.md). Distinct from a null
+/// <see cref="UnitState"/> residual: omitted inspection vs known empty target.
+/// </summary>
+public enum TargetKnownness
+{
+    /// <summary>Target section absent or inspection incomplete — do not treat as no-target.</summary>
+    Unknown = 0,
+
+    /// <summary>Inspection succeeded and the player has no selected target.</summary>
+    KnownNoTarget = 1,
+
+    /// <summary>A selected target is available in telemetry.</summary>
+    KnownTarget = 2,
+}
+
+/// <summary>
+/// Transport-neutral live telemetry source (M2). Implementations publish
+/// normalized frames without combat-profile or calling-specific logic.
+/// </summary>
+public interface ITelemetrySource
+{
+    /// <summary>Latest assembled observation snapshot (may be empty/disconnected).</summary>
+    TelemetryFrame Current { get; }
+}
+
+/// <summary>Observed action-bar slot placement (ability id only; keys remain user-configured).</summary>
+public sealed record ActionBarSlotState(int Slot, string AbilityId);
+
 public sealed record TelemetryFrame(
     ProviderStatus Provider,
     UnitState? Player,
@@ -157,7 +187,12 @@ public sealed record TelemetryFrame(
     IReadOnlyList<AuraState> TargetAuras,
     bool IsAbilitiesKnown = false,
     bool IsPlayerAurasKnown = false,
-    bool IsTargetAurasKnown = false)
+    bool IsTargetAurasKnown = false,
+    TargetKnownness TargetKnownness = TargetKnownness.Unknown,
+    bool? GameInputReady = null,
+    IReadOnlyList<ActionBarSlotState>? ActionBarSlots = null,
+    bool IsActionBarKnown = false,
+    int? ActionBarPage = null)
 {
     public static TelemetryFrame Empty(DateTimeOffset now) => new(
         new ProviderStatus(ProviderHealth.Disconnected, "", "", 0, 0, now, TimeSpan.MaxValue,
@@ -169,5 +204,10 @@ public sealed record TelemetryFrame(
         [],
         IsAbilitiesKnown: false,
         IsPlayerAurasKnown: false,
-        IsTargetAurasKnown: false);
+        IsTargetAurasKnown: false,
+        TargetKnownness: TargetKnownness.Unknown,
+        GameInputReady: null,
+        ActionBarSlots: null,
+        IsActionBarKnown: false,
+        ActionBarPage: null);
 }

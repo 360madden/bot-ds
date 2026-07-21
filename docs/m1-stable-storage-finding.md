@@ -66,7 +66,7 @@ SavedVariables can serve as a **development/debug transport** before the memory 
 
 - **Declaration**: Add `SavedVariables = { "BotDsTelemetry" }` to `RiftAddon.toc`
 - **Flush**: Only on `/reloadui` or client exit — NOT periodic
-- **File path**: `%USERPROFILE%\Documents\RIFT\SavedVariables\[Account]\[Shard]\[Char]\BotDsBridge.lua`
+- **File path**: `{MyDocuments}\RIFT\SavedVariables\[Account]\[Shard]\[Char]\BotDsBridge.lua` where MyDocuments = shell `SpecialFolder.MyDocuments` (OneDrive on this machine; see `docs/rift-local-paths.md`)
 - **Format**: Text-based Lua table serialization; binary `\0` bytes may corrupt
 - **Use**: Copy file to temp location before reading; poll for timestamp changes
 

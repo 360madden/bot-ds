@@ -8,7 +8,9 @@ public sealed record SentinelScannerOptions
 {
     public int ChunkSizeBytes { get; init; } = 1_048_576;
     public int MaxRawMatches { get; init; } = 256;
-    public int MaxCandidates { get; init; } = 32;
+    // Raised from 32: Lua GC leaves many BotDsV05 copies; RankByFreshness keeps the
+    // highest-sequence subset so partial recovery still sees the live publisher.
+    public int MaxCandidates { get; init; } = 64;
 
     public void Validate()
     {
@@ -112,13 +114,37 @@ internal static class V5SentinelScanner
         if (candidates.Count > options.MaxCandidates)
         {
             cause |= ScanIncompleteCause.CandidateLimitExceeded;
-            candidates = candidates.Take(options.MaxCandidates).ToList();
+            // Prefer freshest sequences so GC'd Lua region copies do not crowd out live ones.
+            candidates = RankByFreshness(candidates, options.MaxCandidates);
         }
 
         return Result();
 
         ScanResult Result() => new(candidates.AsReadOnly(), raw, exact, bytes, en.Regions.Count,
             readFails, cause, Stopwatch.GetElapsedTime(t0), en.FailureCause, en.NativeErrorCode);
+    }
+
+    /// <summary>
+    /// Keep the <paramref name="max"/> candidates with the highest session sequence
+    /// (then producer frame time) so stale immutable-string copies lose to live ones.
+    /// </summary>
+    private static List<V5Candidate> RankByFreshness(List<V5Candidate> candidates, int max)
+    {
+        return candidates
+            .Select(c =>
+            {
+                var sel = V5FrameSelector.Select(c.FrameA, c.FrameB, out var rep);
+                uint seq = rep?.Header.Sequence ?? 0;
+                uint prod = rep?.Header.ProducerFrameMs ?? 0;
+                int valid = sel is V5SelectionResult.Selected or V5SelectionResult.Equivalent ? 1 : 0;
+                return (c, valid, seq, prod);
+            })
+            .OrderByDescending(t => t.valid)
+            .ThenByDescending(t => t.seq)
+            .ThenByDescending(t => t.prod)
+            .Take(max)
+            .Select(t => t.c)
+            .ToList();
     }
 
     /// <summary>

@@ -1,0 +1,106 @@
+{
+  "v": 1,
+  "frames": [
+    {
+      "tick": 0,
+      "elapsedMs": 0,
+      "snapshot": {
+        "provider": {
+          "health": "Healthy",
+          "protocolVersion": "5",
+          "sessionId": "offline-fixture",
+          "sequence": 1,
+          "producerFrameMilliseconds": 100,
+          "ageMs": 0
+        },
+        "player": {
+          "id": "p1",
+          "name": "Atank",
+          "level": 45,
+          "calling": "warrior",
+          "isPlayer": true,
+          "relation": "friendly",
+          "currentHealth": 100,
+          "maxHealth": 100,
+          "inCombat": true
+        },
+        "target": {
+          "id": "t1",
+          "name": "Mob",
+          "level": 40,
+          "isPlayer": false,
+          "relation": "hostile",
+          "currentHealth": 50,
+          "maxHealth": 100,
+          "inCombat": true
+        },
+        "abilities": {
+          "A01BB8C035B6A96DD": {
+            "id": "A01BB8C035B6A96DD",
+            "available": true,
+            "usable": true,
+            "inRange": true,
+            "cooldownRemainingMs": 0
+          }
+        },
+        "isAbilitiesKnown": true,
+        "isPlayerAurasKnown": true,
+        "isTargetAurasKnown": true
+      },
+      "expectedDispatch": {
+        "ruleId": "rule-a",
+        "abilityAlias": "a",
+        "abilityId": "A01BB8C035B6A96DD",
+        "key": "1",
+        "acknowledgement": "cooldown"
+      }
+    },
+    {
+      "tick": 1,
+      "elapsedMs": 100,
+      "snapshot": {
+        "provider": {
+          "health": "Healthy",
+          "protocolVersion": "5",
+          "sessionId": "offline-fixture",
+          "sequence": 2,
+          "producerFrameMilliseconds": 200,
+          "ageMs": 0
+        },
+        "player": {
+          "id": "p1",
+          "name": "Atank",
+          "level": 45,
+          "calling": "warrior",
+          "isPlayer": true,
+          "relation": "friendly",
+          "currentHealth": 100,
+          "maxHealth": 100,
+          "inCombat": true
+        },
+        "target": {
+          "id": "t1",
+          "name": "Mob",
+          "level": 40,
+          "isPlayer": false,
+          "relation": "hostile",
+          "currentHealth": 50,
+          "maxHealth": 100,
+          "inCombat": true
+        },
+        "abilities": {
+          "A01BB8C035B6A96DD": {
+            "id": "A01BB8C035B6A96DD",
+            "available": true,
+            "usable": false,
+            "inRange": true,
+            "cooldownRemainingMs": 2500
+          }
+        },
+        "isAbilitiesKnown": true,
+        "isPlayerAurasKnown": true,
+        "isTargetAurasKnown": true
+      }
+    }
+  ]
+}

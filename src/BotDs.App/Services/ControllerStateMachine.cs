@@ -98,17 +98,27 @@ public sealed class ControllerStateMachine
     }
 
     public bool EmergencyStop(string? reason = null)
+        => Stop(StopReason.EmergencyStop, reason ?? "Emergency stop activated.");
+
+    /// <summary>
+    /// Latches the controller into <see cref="ControllerState.Stopped"/> with an explicit reason.
+    /// Used for emergency stop, unacknowledged actions, and other fail-closed outcomes.
+    /// </summary>
+    public bool Stop(StopReason reason, string? message = null)
     {
+        if (reason is StopReason.None)
+            throw new ArgumentOutOfRangeException(nameof(reason), "Stop requires a non-None reason.");
+
         lock (_lock)
         {
             if (_state is ControllerState.Stopped or ControllerState.Faulted)
                 return false;
             _state = ControllerState.Stopped;
-            _stopReason = StopReason.EmergencyStop;
-            _message = reason ?? "Emergency stop activated.";
+            _stopReason = reason;
+            _message = message ?? reason.ToString();
             _pendingAction = null;
             _generation++;
-            _log.LogWarning("Emergency stop: {Reason} (gen={Generation})", _message, _generation);
+            _log.LogWarning("Stopped ({Reason}): {Message} (gen={Generation})", reason, _message, _generation);
             return true;
         }
     }

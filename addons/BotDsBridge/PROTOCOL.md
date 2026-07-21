@@ -58,7 +58,11 @@ Offset   Size  Field
 |-----|------|-----------------|
 | 0 | IsHeartbeat | This frame contains only ProviderInfo and no game-state sections; the reader should use it for freshness only |
 | 1 | IsSecure | RIFT secure mode is active (Inspected via System.Secure) |
-| 2–7 | Reserved | MUST be 0 |
+| 2 | GameInputReady | When bit 3 is also set: combat key input is ready (not chat/edit-focus blocked) |
+| 3 | GameInputReadyKnown | Bit 2 is meaningful; clear = readiness unknown |
+| 4–7 | Reserved | MUST be 0 |
+
+**Target knownness (M2):** Target section omitted ⇒ unknown. Target section present with `UnitFlagIsAvailable` clear ⇒ known no target. Present with available unit ⇒ known target.
 
 ### 3.2 SectionsMask
 
@@ -96,8 +100,8 @@ Offset  Size  Field
 | 16 | 4 | uint32 LE | ProducerFrameMs (monotonic frame milliseconds, e.g. Inspect.Time.Frame(); NOT epoch) |
 | 20 | 4 | uint32 LE | MaxTelemetryAgeMs (maximum acceptable unchanged-sequence age) |
 | 24 | 2 | uint16 LE | ClientVersionLength |
-| 26 | N | ASCII | ClientVersion (Inspect.System.Version external string, NOT null-terminated) |
-| — | 1 | uint8 | SchemaVersion (protocol schema version, currently 1) |
+| 26 | N | ASCII | ClientVersion (`Inspect.System.Version().external` preferred; never `tostring(table)`, NOT null-terminated) |
+| — | 1 | uint8 | SchemaVersion (currently **2** — ability records include name; action bar section optional) |
 | — | 1 | uint8 | Reserved (MUST be 0) |
 
 Minimum ProviderInfo data length (with empty client version): 28 bytes.
@@ -146,9 +150,9 @@ Maximum string lengths: Id 64, Name 32, Calling 16, ResourceKind 16, CastAbility
 | Offset | Size | Type | Field |
 |--------|------|------|-------|
 | 0 | 2 | uint16 LE | Count (number of ability records, 0–128) |
-| 2 | N×46 | — | Ability records (each 46 bytes fixed, see below) |
+| 2 | N×80 | — | Ability records (each 80 bytes fixed, schema v2) |
 
-**Ability Record** (46 bytes, fixed-length for scanning efficiency):
+**Ability Record** (80 bytes, fixed-length for scanning efficiency; **schema version 2**):
 
 | Offset | Size | Type | Field | Null sentinel |
 |--------|------|------|-------|---------------|
@@ -157,9 +161,24 @@ Maximum string lengths: Id 64, Name 32, Calling 16, ResourceKind 16, CastAbility
 | 36 | 4 | int32 LE | CooldownDurationMs | −1 |
 | 40 | 4 | int32 LE | CastTimeMs | −1 |
 | 44 | 1 | uint8 | Flags (bit0=available, bit1=usable, bit2=inRange, bit3=passive, bit4=channeled) | — |
-| 45 | 1 | uint8 | ResourceCost (primary resource cost, 0–255; for exact costs use ability detail) | — |
+| 45 | 1 | uint8 | ResourceCost (primary resource cost, 0–255) | — |
+| 46 | 2 | uint16 LE | NameLength | 0 |
+| 48 | 32 | UTF-8 | Name (null-padded; display name from `Inspect.Ability.New.Detail().name`) | empty |
 
-Fixed-length records allow the parser to compute offsets without per-record length scanning. String fields use ASCII space-padding to fill their 32-byte allocation. A zero-length ability ID (first byte '\0') indicates an empty/unused record slot.
+**Emitter notes (RIFT current client):**
+- Detail API times (`currentCooldownRemaining`, `currentCooldownDuration`, `cooldown`, `castingTime`) are **seconds**; the bridge converts to milliseconds on the wire.
+- Usability is primarily `not detail.unusable` (Detail docs list `unusable`, not a stable `usable` member). Passive abilities set the passive bit and clear usable.
+- Fixed-length records allow the parser to compute offsets without per-record length scanning.
+
+### 4.5 Action Bar (0x0007) — calibration only
+
+| Offset | Size | Type | Field |
+|--------|------|------|-------|
+| 0 | 1 | uint8 | Page (`Action.Bar.Page.Get()` when available) |
+| 1 | 1 | uint8 | SlotCount (0–12) |
+| 2 | N×33 | — | Slot records: `slot` (uint8 1–12) + AbilityId (32 ASCII space-padded; empty = no ability) |
+
+Keys are **not** observable; this section maps bar slots → ability ids for operator calibration only.
 
 ### 4.4 Auras List (0x0005 Player, 0x0006 Target)
 

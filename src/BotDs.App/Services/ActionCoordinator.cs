@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using BotDs.Core;
 using BotDs.Input;
 
@@ -47,6 +46,12 @@ public enum DispatchOutcome
     /// <summary>Action timed out waiting for acknowledgement.</summary>
     AcknowledgementTimeout,
 
+    /// <summary>Typed acknowledgement matched post-dispatch telemetry.</summary>
+    Acknowledged,
+
+    /// <summary>Pending action discarded due to session/target/source change.</summary>
+    PendingInvalidated,
+
     /// <summary>Cancelled by controller state change.</summary>
     Cancelled,
 
@@ -56,45 +61,42 @@ public enum DispatchOutcome
 
 /// <summary>
 /// Serialized action coordinator. Consumes evaluation results while armed,
-/// enforces rate limits, validates preconditions, and tracks pending
-/// actions with bounded acknowledgement timeouts.
-/// 
-/// In DryRun mode: all checks run but no input is dispatched.
-/// In Disabled/Live mode: as documented.
+/// enforces rate limits, validates preconditions, tracks pending actions with
+/// typed acknowledgement matching, and records binding verification on success.
 /// </summary>
 public sealed class ActionCoordinator
 {
-    // ── Configurable bounds ──────────────────────────────────
     private readonly TimeSpan _ackTimeout;
     private readonly TimeSpan _minGlobalInterval;
     private readonly TimeSpan _minPerKeyInterval;
-    // ── Dependencies ─────────────────────────────────────────
+    private readonly bool _requireBindingVerificationForLive;
+    private readonly bool _requireEmergencyHotkeyForLive;
+    private readonly bool _detectExternalActionConflicts;
+    private readonly string _emergencyHotkeyBinding;
     private readonly SnapshotPublisher _publisher;
     private readonly ControllerStateMachine _stateMachine;
     private readonly ProfileService _profiles;
     private readonly ArmingReadinessService _readiness;
+    private readonly BindingVerificationTracker _bindings;
+    private readonly IEmergencyHotkey _emergencyHotkey;
     private readonly IKeySink _keySink;
     private readonly TimeProvider _time;
     private readonly ILogger<ActionCoordinator> _log;
 
-    // ── State ────────────────────────────────────────────────
     private readonly object _lock = new();
     private OutputMode _outputMode = OutputMode.Disabled;
 
-    // Rate limit state
     private DateTimeOffset _lastDispatchUtc = DateTimeOffset.MinValue;
     private readonly Dictionary<string, DateTimeOffset> _perKeyLastDispatch = new(StringComparer.OrdinalIgnoreCase);
 
-    // Pending action tracking
     private ActionDecision? _pendingAction;
+    private PendingActionBaseline? _pendingBaseline;
     private DateTimeOffset _pendingActionDispatchedUtc = DateTimeOffset.MinValue;
-    private ulong _preDispatchHighWaterSeq;
+    private TelemetryFrame? _previousFrame;
 
-    // History
     private readonly List<DispatchRecord> _recentHistory = [];
     private const int MaxHistory = 200;
 
-    // Telemetry fence — ensures no new read cycle starts during dispatch
     private readonly SemaphoreSlim _dispatchFence = new(1, 1);
 
     public ActionCoordinator(
@@ -105,12 +107,20 @@ public sealed class ActionCoordinator
         IConfiguration configuration,
         IKeySink? keySink = null,
         TimeProvider? timeProvider = null,
-        ILogger<ActionCoordinator>? log = null)
+        ILogger<ActionCoordinator>? log = null,
+        BindingVerificationTracker? bindingVerification = null,
+        IEmergencyHotkey? emergencyHotkey = null)
     {
         _publisher = publisher;
         _stateMachine = stateMachine;
         _profiles = profiles;
         _readiness = readiness;
+        _bindings = bindingVerification ?? new BindingVerificationTracker();
+        _emergencyHotkeyBinding = configuration.GetValue<string>("BotDs:Action:EmergencyHotkey")
+            ?? "Ctrl+Shift+F12";
+        // Default fake hotkey is pre-registered so unit tests and DryRun hosts
+        // are not blocked; production hosts inject WindowsEmergencyHotkey via DI.
+        _emergencyHotkey = emergencyHotkey ?? CreateDefaultFakeHotkey(_emergencyHotkeyBinding);
         _keySink = keySink ?? new FakeKeySink();
         _time = timeProvider ?? TimeProvider.System;
         _log = log ?? NullLoggerFactory.Instance.CreateLogger<ActionCoordinator>();
@@ -121,9 +131,13 @@ public sealed class ActionCoordinator
             (int)(1000.0 / configuration.GetValue<int>("BotDs:Action:MaxGlobalPerSecond", 4)));
         _minPerKeyInterval = TimeSpan.FromMilliseconds(
             (int)(1000.0 / configuration.GetValue<int>("BotDs:Action:MaxPerKeyPerSecond", 2)));
+        _requireBindingVerificationForLive = configuration.GetValue(
+            "BotDs:Action:RequireBindingVerificationForLive", true);
+        _requireEmergencyHotkeyForLive = configuration.GetValue(
+            "BotDs:Action:RequireEmergencyHotkeyForLive", true);
+        _detectExternalActionConflicts = configuration.GetValue(
+            "BotDs:Action:DetectExternalActionConflicts", true);
     }
-
-    // ── Public API ───────────────────────────────────────────
 
     public OutputMode Mode
     {
@@ -140,9 +154,14 @@ public sealed class ActionCoordinator
         get { lock (_lock) return _recentHistory.ToList(); }
     }
 
+    public BindingVerificationTracker Bindings => _bindings;
+
+    public IEmergencyHotkey EmergencyHotkey => _emergencyHotkey;
+
     /// <summary>
-    /// Attempt to arm the coordinator. Fails if output mode is not DryRun or Live,
-    /// or if readiness check fails.
+    /// Attempt to set output mode. Non-Disabled modes require readiness.
+    /// Live additionally requires verified bindings and a registered emergency hotkey
+    /// when configured.
     /// </summary>
     public bool TrySetMode(OutputMode mode, TimeSpan maxTelemetryAge)
     {
@@ -153,13 +172,14 @@ public sealed class ActionCoordinator
                 CancelPendingLocked("Output disabled");
                 _outputMode = OutputMode.Disabled;
                 _perKeyLastDispatch.Clear();
+                _previousFrame = null;
                 _log.LogInformation("Output mode set to Disabled");
                 return true;
             }
 
             if (_outputMode != OutputMode.Disabled)
             {
-                _log.LogWarning("Cannot change output mode from {Current} to {Requested} — disarm first",
+                _log.LogWarning("Cannot change output mode from {Current} to {Requested} — set Disabled first",
                     _outputMode, mode);
                 return false;
             }
@@ -172,7 +192,39 @@ public sealed class ActionCoordinator
                 return false;
             }
 
+            AlignBindingsLocked(ready.Profile, ready.Frame);
+
+            if (ready.Profile is not null
+                && ProfileCollidesWithEmergencyHotkey(ready.Profile, _emergencyHotkey.Binding))
+            {
+                _log.LogWarning(
+                    "Output mode {Mode} blocked: profile binding collides with emergency hotkey {Hotkey}",
+                    mode, _emergencyHotkey.Binding);
+                return false;
+            }
+
+            if (mode == OutputMode.Live && _requireBindingVerificationForLive && ready.Profile is not null)
+            {
+                IReadOnlyList<string> bindingBlockers = _bindings.GetLiveBlockers(
+                    ready.Profile, ready.Frame?.Player?.Level);
+                if (bindingBlockers.Count > 0)
+                {
+                    _log.LogWarning("Live mode blocked by binding verification: {Blockers}",
+                        string.Join("; ", bindingBlockers));
+                    return false;
+                }
+            }
+
+            if (mode == OutputMode.Live && _requireEmergencyHotkeyForLive && !_emergencyHotkey.IsRegistered)
+            {
+                _log.LogWarning(
+                    "Live mode blocked: emergency hotkey '{Hotkey}' is not registered ({Error})",
+                    _emergencyHotkey.Binding, _emergencyHotkey.LastError ?? "not registered");
+                return false;
+            }
+
             _outputMode = mode;
+            _previousFrame = ready.Frame;
             _log.LogInformation("Output mode set to {Mode}", mode);
             return true;
         }
@@ -185,40 +237,139 @@ public sealed class ActionCoordinator
             CancelPendingLocked("Output disabled");
             _outputMode = OutputMode.Disabled;
             _perKeyLastDispatch.Clear();
+            _previousFrame = null;
             _log.LogInformation("Output mode set to Disabled");
             return true;
         }
     }
 
     /// <summary>
-    /// Consume an evaluation result. Called by EvaluatorLoop on each tick.
+    /// Armed-tick housekeeping: external-action conflict detection, then pending acknowledgement.
+    /// Must be called every armed evaluation tick, including when no new action is produced.
+    /// </summary>
+    public DispatchRecord? ObservePending(TelemetryFrame frame, long controllerGeneration)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+
+        lock (_lock)
+        {
+            AlignBindingsLocked(_profiles.ActiveProfile, frame);
+
+            var state = _stateMachine.State;
+            if (state is not (ControllerState.Disarmed or ControllerState.Stopped or ControllerState.Faulted)
+                && _detectExternalActionConflicts
+                && _previousFrame is not null
+                && _profiles.ActiveProfile is not null
+                && ExternalActionConflictDetector.TryDetect(
+                    _profiles.ActiveProfile, _previousFrame, frame, _pendingAction, out string conflictDetail))
+            {
+                DispatchRecord record = RecordAndReturnLocked(
+                    _pendingAction ?? new ActionDecision("external", "external", "external", "?", AcknowledgementKind.Cooldown, frame.Provider.Sequence),
+                    DispatchOutcome.Cancelled,
+                    conflictDetail);
+                CancelPendingLocked(conflictDetail);
+                _stateMachine.Stop(StopReason.ExternalActionConflict, conflictDetail);
+                DisableUnlocked();
+                _previousFrame = frame;
+                _log.LogWarning("{Detail}", conflictDetail);
+                return record;
+            }
+
+            _previousFrame = frame;
+
+            if (_pendingAction is null || _pendingBaseline is null)
+                return null;
+
+            if (_stateMachine.Generation != controllerGeneration)
+            {
+                return InvalidatePendingLocked("Controller generation changed");
+            }
+
+            state = _stateMachine.State;
+            if (state is ControllerState.Disarmed or ControllerState.Stopped or ControllerState.Faulted)
+            {
+                return InvalidatePendingLocked($"Controller state is {state}");
+            }
+
+            AcknowledgementMatch match = ActionAcknowledgementMatcher.TryMatch(_pendingBaseline, frame);
+            if (match == AcknowledgementMatch.Matched)
+            {
+                ActionDecision action = _pendingAction;
+                _bindings.MarkVerified(action.AbilityAlias);
+                DispatchRecord record = RecordAndReturnLocked(
+                    action, DispatchOutcome.Acknowledged,
+                    $"ack={action.Acknowledgement}; seq={frame.Provider.Sequence}");
+                CancelPendingLocked("Acknowledged");
+                _log.LogInformation(
+                    "Action acknowledged: {AbilityId} via {Kind} (binding {Alias} Verified)",
+                    action.AbilityId, action.Acknowledgement, action.AbilityAlias);
+                return record;
+            }
+
+            if (match == AcknowledgementMatch.Invalidated)
+            {
+                return InvalidatePendingLocked("Session, source generation, or target changed");
+            }
+
+            // Still pending — check timeout
+            DateTimeOffset now = _time.GetUtcNow();
+            TimeSpan elapsed = now - _pendingActionDispatchedUtc;
+            if (elapsed > _ackTimeout)
+            {
+                ActionDecision timedOut = _pendingAction;
+                DispatchRecord record = RecordAndReturnLocked(
+                    timedOut, DispatchOutcome.AcknowledgementTimeout,
+                    $"Pending action timed out after {elapsed.TotalMilliseconds:F0}ms");
+                CancelPendingLocked("Acknowledgement timeout");
+
+                if (_outputMode == OutputMode.Live)
+                {
+                    _stateMachine.Stop(
+                        StopReason.ActionNotAcknowledged,
+                        $"Action '{timedOut.AbilityId}' was not acknowledged within {_ackTimeout.TotalMilliseconds:F0}ms.");
+                    DisableUnlocked();
+                }
+
+                return record;
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Consume an evaluation result. Called by EvaluatorLoop on each armed tick that produces an action.
     /// Returns a dispatch record if a dispatch was attempted, null otherwise.
     /// </summary>
     public DispatchRecord? Consume(EvaluationResult result, long controllerGeneration)
     {
-        // Quick exit if disabled
         OutputMode mode;
         lock (_lock) { mode = _outputMode; }
         if (mode == OutputMode.Disabled)
             return null;
 
-        // Must have an action
-        if (!result.HasAction || result.Action is null)
+        // Always attempt pending observation first using latest publisher frame.
+        DispatchRecord? observed = ObservePending(_publisher.Latest, controllerGeneration);
+        if (observed is not null
+            && observed.Outcome is DispatchOutcome.AcknowledgementTimeout
+                or DispatchOutcome.PendingInvalidated)
         {
-            CheckPendingTimeout();
-            return null;
+            // Fail-closed paths should not immediately re-dispatch in the same tick.
+            if (observed.Outcome == DispatchOutcome.AcknowledgementTimeout && mode == OutputMode.Live)
+                return observed;
         }
 
-        return TryDispatch(result.Action, controllerGeneration);
-    }
+        if (!result.HasAction || result.Action is null)
+            return observed;
 
-    // ── Dispatch logic ───────────────────────────────────────
+        // If we just acknowledged, fall through and allow a new dispatch this tick.
+        return TryDispatch(result.Action, controllerGeneration) ?? observed;
+    }
 
     private DispatchRecord? TryDispatch(ActionDecision action, long controllerGeneration)
     {
         var now = _time.GetUtcNow();
 
-        // Acquire the telemetry fence — blocks new read cycles during dispatch
         if (!_dispatchFence.Wait(0))
         {
             _log.LogDebug("Dispatch fence busy — skipping cycle");
@@ -230,10 +381,8 @@ public sealed class ActionCoordinator
             lock (_lock)
             {
                 if (_outputMode == OutputMode.Disabled)
-                    return RecordAndReturn(action, DispatchOutcome.NotArmed, "Output disabled");
+                    return RecordAndReturnLocked(action, DispatchOutcome.NotArmed, "Output disabled");
 
-                // ── Pre-dispatch revalidation ──────────────────
-                // Check pending action hasn't timed out
                 if (_pendingAction is not null)
                 {
                     TimeSpan elapsed = now - _pendingActionDispatchedUtc;
@@ -243,7 +392,15 @@ public sealed class ActionCoordinator
                             _pendingAction, DispatchOutcome.AcknowledgementTimeout,
                             $"Pending action timed out after {elapsed.TotalMilliseconds:F0}ms");
                         CancelPendingLocked("Acknowledgement timeout");
-                        // Fall through to try the new action
+                        if (_outputMode == OutputMode.Live)
+                        {
+                            _stateMachine.Stop(
+                                StopReason.ActionNotAcknowledged,
+                                $"Action '{timeout.AbilityId}' was not acknowledged within {_ackTimeout.TotalMilliseconds:F0}ms.");
+                            DisableUnlocked();
+                            return timeout;
+                        }
+                        // DryRun: fall through to try the new action
                     }
                     else
                     {
@@ -253,7 +410,6 @@ public sealed class ActionCoordinator
                     }
                 }
 
-                // Rate limit — global
                 TimeSpan globalElapsed = now - _lastDispatchUtc;
                 if (globalElapsed < _minGlobalInterval)
                 {
@@ -262,7 +418,6 @@ public sealed class ActionCoordinator
                         $"Global rate limit ({_minGlobalInterval.TotalMilliseconds:F0}ms min), elapsed {globalElapsed.TotalMilliseconds:F0}ms");
                 }
 
-                // Rate limit — per-key
                 if (_perKeyLastDispatch.TryGetValue(action.Key, out var lastKeyUtc))
                 {
                     TimeSpan keyElapsed = now - lastKeyUtc;
@@ -274,7 +429,6 @@ public sealed class ActionCoordinator
                     }
                 }
 
-                // Revalidate controller generation hasn't changed
                 if (_stateMachine.Generation != controllerGeneration)
                 {
                     return RecordAndReturnLocked(
@@ -282,7 +436,6 @@ public sealed class ActionCoordinator
                         "Controller generation changed — evaluation is stale");
                 }
 
-                // Revalidate controller state is armed
                 var state = _stateMachine.State;
                 if (state is ControllerState.Disarmed or ControllerState.Stopped or ControllerState.Faulted)
                 {
@@ -291,7 +444,9 @@ public sealed class ActionCoordinator
                         $"Controller state is {state}");
                 }
 
-                // ── Dispatch (or dry-run log) ─────────────────
+                TelemetryFrame frame = _publisher.Latest;
+                AlignBindingsLocked(_profiles.ActiveProfile, frame);
+
                 if (_outputMode == OutputMode.DryRun)
                 {
                     bool dispatched = _keySink.DispatchKey(action.Key, CancellationToken.None);
@@ -322,12 +477,11 @@ public sealed class ActionCoordinator
                         action.Key, action.AbilityId);
                 }
 
-                // Record dispatch
                 _lastDispatchUtc = now;
                 _perKeyLastDispatch[action.Key] = now;
                 _pendingAction = action;
                 _pendingActionDispatchedUtc = now;
-                _preDispatchHighWaterSeq = action.FrameSequence;
+                _pendingBaseline = ActionAcknowledgementMatcher.CaptureBaseline(action, frame, now);
 
                 return RecordAndReturnLocked(
                     action, DispatchOutcome.Dispatched,
@@ -340,38 +494,27 @@ public sealed class ActionCoordinator
         }
     }
 
-    /// <summary>
-    /// Check if the pending action has timed out without a new evaluation cycle.
-    /// Called on each Consume tick even when no action is produced.
-    /// </summary>
-    private void CheckPendingTimeout()
-    {
-        var now = _time.GetUtcNow();
-        lock (_lock)
-        {
-            if (_pendingAction is not null)
-            {
-                TimeSpan elapsed = now - _pendingActionDispatchedUtc;
-                if (elapsed > _ackTimeout)
-                {
-                    _log.LogWarning(
-                        "Pending action {Action} timed out after {Elapsed:F0}ms",
-                        _pendingAction.AbilityId, elapsed.TotalMilliseconds);
-                    RecordAndReturnLocked(
-                        _pendingAction, DispatchOutcome.AcknowledgementTimeout,
-                        $"Timeout after {elapsed.TotalMilliseconds:F0}ms");
-                    CancelPendingLocked("Acknowledgement timeout");
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Clear the pending action with a reason. Called on disarm/estop/disable.
-    /// </summary>
     public void CancelPending(string reason)
     {
         lock (_lock) CancelPendingLocked(reason);
+    }
+
+    private void AlignBindingsLocked(CombatProfile? profile, TelemetryFrame? frame)
+    {
+        _bindings.Align(profile?.Id, frame?.Provider.SessionId);
+    }
+
+    private DispatchRecord InvalidatePendingLocked(string reason)
+    {
+        ActionDecision? action = _pendingAction;
+        if (action is null)
+            return RecordAndReturnLocked(
+                new ActionDecision("?", "?", "?", "?", AcknowledgementKind.Cooldown, 0),
+                DispatchOutcome.PendingInvalidated, reason);
+
+        DispatchRecord record = RecordAndReturnLocked(action, DispatchOutcome.PendingInvalidated, reason);
+        CancelPendingLocked(reason);
+        return record;
     }
 
     private void CancelPendingLocked(string reason)
@@ -380,16 +523,38 @@ public sealed class ActionCoordinator
         {
             _log.LogInformation("Cancelled pending action {AbilityId}: {Reason}",
                 _pendingAction.AbilityId, reason);
-            _pendingAction = null;
-            _pendingActionDispatchedUtc = DateTimeOffset.MinValue;
         }
+        _pendingAction = null;
+        _pendingBaseline = null;
+        _pendingActionDispatchedUtc = DateTimeOffset.MinValue;
     }
 
-    // ── History ──────────────────────────────────────────────
-
-    private DispatchRecord RecordAndReturn(ActionDecision action, DispatchOutcome outcome, string? detail)
+    private void DisableUnlocked()
     {
-        lock (_lock) return RecordAndReturnLocked(action, outcome, detail);
+        _outputMode = OutputMode.Disabled;
+        _perKeyLastDispatch.Clear();
+        _previousFrame = null;
+        _log.LogInformation("Output mode forced to Disabled");
+    }
+
+    private static bool ProfileCollidesWithEmergencyHotkey(CombatProfile profile, string emergencyHotkey)
+    {
+        foreach (AbilityBinding binding in profile.Abilities.Values)
+        {
+            if (binding is not { Enabled: true })
+                continue;
+            if (VirtualKeyMap.Collides(binding.Key, emergencyHotkey))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static FakeEmergencyHotkey CreateDefaultFakeHotkey(string binding)
+    {
+        var fake = new FakeEmergencyHotkey(binding);
+        _ = fake.TryRegister(static () => { });
+        return fake;
     }
 
     private DispatchRecord RecordAndReturnLocked(ActionDecision action, DispatchOutcome outcome, string? detail)
@@ -400,8 +565,6 @@ public sealed class ActionCoordinator
             _recentHistory.RemoveAt(0);
         return record;
     }
-
-    // ── Null logger factory for optional logger ──────────────
 
     private sealed class NullLoggerFactory : ILoggerFactory
     {

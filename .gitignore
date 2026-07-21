@@ -9,3 +9,5 @@ coverage/
 logs/
 *.log
 .playwright-mcp/
+botds.local.cmd
+publish/

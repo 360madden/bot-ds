@@ -1,0 +1,19 @@
+{
+  "Scanner": {
+    "ProcessName": "rift",
+    "ProcessId": null,
+    "ReadIntervalMs": 50,
+    "LocalMaxAgeMs": 500
+  },
+  "Evaluator": {
+    "MaximumTelemetryAgeMs": 500,
+    "EvaluationIntervalMs": 100
+  },
+  "Dashboard": {
+    "UpdateIntervalMs": 2000,
+    "MaxLogEntries": 500
+  },
+  "Logging": {
+    "RetainedFileCountLimit": 14
+  }
+}

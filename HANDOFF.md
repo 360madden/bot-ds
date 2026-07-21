@@ -1,20 +1,126 @@
 # Implementation Handoff
 
-Last updated: 2026-07-20 (Session 2026-07-20c)
+Last updated: **2026-07-21k** (authoritative resume snapshot)
 
-## Resume Instruction
+**Repo:** `C:\work\bot-ds` · **Branch:** `master` · **Last committed HEAD:** `a0a8be4` (large uncommitted working tree — do not discard; user has not requested commit)
 
-Restart OpenCode from `C:\work\bot-ds`, then ask: `resume implementation with configured swarm`.
+## Resume in one paragraph
 
-Read these files before changing code:
+BotDs is a personal RIFT combat-only bot (C#/.NET 10 + Lua bridge). **M0–M7 complete; M2/M8 code-complete** with live residual deferred; **M9 planned**. Live path has been proven Healthy (player Atank L45 warrior, abilities inventory). Bridge **0.2.0** / protocol **schema v2** fixes ability usable/CD/name (Detail times are **seconds**; usability is **`not unusable`**). Offline work added draft authoring tests, DryRun multi-tick harness, and file-backed replay. **Do not invent Warrior ability IDs, keys, or rotations.** Next product value is **live return**: `/reloadui` → confirm abilities/bar → confirm draft keys → DryRun; then Live residual / M9 as needed.
 
-1. `AGENTS.md`
-2. `PLAN.md`
-3. `ROADMAP.md`
-4. `context/README.md` and every indexed context document
-5. This handoff
+## RIFT addon path (read this first — agents keep getting it wrong)
 
-## Agent Runtime Status
+| Item | Value |
+|------|--------|
+| **Shell MyDocuments** | `Environment.SpecialFolder.MyDocuments` → `C:\Users\mrkoo\OneDrive\Documents` |
+| **Player AddOns** | `{MyDocuments}\RIFT\Interface\AddOns\` |
+| **BotDsBridge deploy** | `{MyDocuments}\RIFT\Interface\AddOns\BotDsBridge\` |
+| **Code** | `BotDs.Core.RiftLocalPaths` |
+| **Doc** | `docs/rift-local-paths.md` |
+| **Deploy command** | `deploy-addon.cmd` |
+| **Bridge version** | **0.2.0** (`RiftAddon.toc` + `ADDON_VERSION` in `main.lua`) |
+
+**Wrong:** Glyph `Live\Interface\Addons`, or non-OneDrive `C:\Users\...\Documents\RIFT\...` when MyDocuments is OneDrive.  
+**Verify:** destination parent must already list JAB/ReaderBridge/etc. before deploy is “done”.  
+**TOC:** non-empty `Identifier`, `Name`, and `Email` required or RIFT never lists the addon (`Email = ""` is fatal).  
+**Then:** in-game `/reloadui` — chat should show `BotDs Bridge v0.2.0`.
+
+## How to run
+
+| Mode | Command |
+|------|---------|
+| Dev | `run-botds.cmd` (default process `rift_x64`, URL `http://localhost:5068`) |
+| Publish | `dotnet publish src/BotDs.App/BotDs.App.csproj -c Release -r win-x64 --self-contained false -o publish/` then `run-botds.cmd --publish` |
+| Addon | `deploy-addon.cmd` then in-game `/reloadui` |
+| First-run doc | `docs/first-run.md` |
+
+- Dashboard: **loopback only**, **no API tokens**.
+- Profiles: `profiles/` (absolute pin via `BotDs__Profiles__Directory` / launcher). Sidecar `*.names.json` is authoring-only (not loaded as combat profiles).
+- Published exe name: **`publish\BotDs.App.exe`** (not `BotDs.exe`).
+
+## Resume instruction (next agent)
+
+1. Read `AGENTS.md`, `docs/rift-local-paths.md`, `PLAN.md`, `ROADMAP.md`, `docs/first-run.md`, this file.
+2. Assume **uncommitted work is intentional** — preserve it; do not `reset --hard` or force-push.
+3. Verify offline: `dotnet test BotDs.sln` (expect **579** as of this handoff; re-count after changes).
+4. If RIFT is available, follow **Live return checklist** below before inventing more offline work.
+5. Constraints: C#/.NET 10 only for new tools; no Python; no standalone `.ps1` apps; privacy/loopback; no movement/pathfinding.
+
+## Live return checklist (highest product priority)
+
+1. RIFT running as **`rift_x64`**; `deploy-addon.cmd` already targets OneDrive AddOns — confirm sibling addons present.
+2. In-game **`/reloadui`** → `BotDs Bridge v0.2.0`.
+3. Start app: `run-botds.cmd` → open `http://localhost:5068`.
+4. `GET /api/status` → **Healthy**, player/target knownness sensible.
+5. Dashboard **Abilities**: names present (schema v2), usable not permanently all-false; cast and watch CD ms change.
+6. Dashboard **Action bar**: slots → ability ids; suggested keys are **defaults only** — operator confirms.
+7. **Draft profile from live** → confirm keys in `profiles/draft-*-live.json` → enable carefully.
+8. Hostile target → profile selected → output **DryRun** → decisions should match offline multi-tick expectations (`DryRunMultiTickTests` pattern).
+9. Live mode only after binding Verified + emergency hotkey; never invent keys.
+
+## Milestone status
+
+| Milestone | Status |
+|-----------|--------|
+| M0–M7 | **Complete** |
+| M2 live telemetry | **Code-complete** + live Healthy proven earlier; soak / formal §15.1 residual deferred |
+| M8 closed-loop combat | **Code-complete**; live residual deferred (calibration, soak, failure matrix) |
+| M9 packaging/acceptance | **Planned** (publish/launcher exist; docs improved; not full acceptance) |
+
+**Do not** mark M2/M8 Fully Complete without live soak evidence. **Do not** invent Warrior combat content.
+
+## Architecture snapshot (shipped)
+
+- **Core:** `TelemetryFrame`, knownness, profiles, `CombatEvaluator`, ack/binding/external-conflict, `ReplayEnvelope` + **`ReplayEnvelopeStore`** (file load/save, size/version limits).
+- **Reader:** V5 dual-buffer, dual **schema 1–2** (v1 46-byte abilities; v2 80-byte + name + action bar), RankByFreshness, limit-only partial select, benign sequence gaps ≤15 Healthy, proactive window refresh (no full-scan on stagnation).
+- **App:** loopback dashboard (no tokens), `TelemetryReaderLoop`, evaluator/coordinator DryRun/Live, emergency hotkey, **DraftProfileBuilder**, `/api/abilities`, `/api/action-bar`, draft-from-telemetry, abilities/bar UI cards.
+- **Addon:** BotDsBridge 0.2.0 — materialize with sequence, Version table, seconds→ms CDs, usable from unusable, action bar section.
+- **Profiles:** `draft-warrior-45-live.json` (55 observed IDs, disabled, empty keys); `disabled-warrior-45.json` placeholder; `synthetic-mage-50.json` test fixture only.
+
+## Verification status
+
+Last full offline run (session 2026-07-21j):
+
+```text
+dotnet test BotDs.sln   → 579/579 pass
+```
+
+Key new/updated tests:
+
+- `AbilityFidelityTests` — usable/CD/name map, schema v1 ability records, action bar
+- `DraftProfileAuthoringTests` — key hints, names sidecar content, disabled validate
+- `DryRunMultiTickTests` — multi-tick rule fire using real draft ability IDs
+- `ReplayEnvelopeStoreTests` + fixture `tests/BotDs.Tests/Fixtures/replay-combat-cycle.json`
+- Existing M8/coordinator/scanner suites remain
+
+## Remaining work (ordered)
+
+### When live (product-critical)
+
+1. `/reloadui` + Healthy end-to-end with schema v2 names/CD/bar.
+2. Operator key confirmation on draft profile; DryRun on hostile target.
+3. Binding verification + Live residual (ack soak, failure matrix, 30‑min combat soak).
+4. Optional: capture a live `ReplayEnvelope` fixture from real frames for regression.
+
+### Offline (if still offline)
+
+1. Phase 4 deferred: thin `WebApplicationFactory` tests for `/api/abilities`, action-bar, draft POST, control fail-closed.
+2. Further M9: clean-checkout doc polish, publish smoke assert (exe + wwwroot), knowledge.md/README residual cleanup (README limitations were updated 2026-07-21j; some sub-READMEs may still be stale).
+3. Findings-only bug hunt (high reasoning) on scanner/coordinator before Live — not required to re-green suite.
+
+## Hard constraints (always)
+
+- C# / .NET 10+ for new executable helpers; no Python; no standalone PowerShell apps (`.cmd` thin wrappers only).
+- Privacy: local, loopback control, no credentials/chat collection.
+- No movement/pathfinding.
+- No inventing Warrior ability IDs, keys, or rotations.
+- Fail closed on stale/unknown/ambiguous combat state.
+
+## Agent runtime note (historical)
+
+An earlier OpenCode swarm hit a SQLite schema mismatch on old `1.15.3`; package was upgraded to `1.18.3`. Restart OpenCode after agent config changes. See prior notes / upstream as needed; not a product blocker for Grok Build / direct `dotnet` work.
+
+## Agent Runtime Status (legacy)
 
 An earlier five-agent swarm exposed an OpenCode runtime/database schema mismatch. The process used OpenCode `1.15.3`, while the shared SQLite schema required `session_message.seq`.
 
@@ -91,16 +197,21 @@ This code has received parallel implementation, integration, adversarial testing
 
 ## Verification Status
 
-The following completed successfully after restoring packages:
+Authoritative recent suite (2026-07-21j offline handoff):
+
+```text
+dotnet test BotDs.sln   → 579/579 pass
+```
+
+Full formal gate (when time allows):
 
 ```text
 dotnet restore BotDs.sln
 dotnet build BotDs.sln --no-restore
 dotnet test BotDs.sln --no-build
 dotnet format BotDs.sln --verify-no-changes --no-restore
+node --check src/BotDs.App/wwwroot/js/app.js
 ```
-
-Result: zero warnings, zero errors, and 512 passing tests.
 
 ## Configured OpenCode Agents
 
@@ -159,13 +270,12 @@ The merged configuration and agent definitions passed `opencode debug config` an
 - Native error mapping (`MapWin32Error`) wired for `VerifyName` failures, with test coverage.
 - `schemas/combat-profile.schema.json` updated with `character.build` condition, `required` per-binding field, and extended conditions.
 - `addons/BotDsBridge/PROTOCOL.md` contains the normative wire-format specification with byte offsets, section encoding, CRC rules, double-buffer discipline, and health mapping.
-- The solution currently has 512 passing Core, protocol, scanner/native, controller, security, profile, telemetry, pipeline, evaluator, and action-coordinator tests.
+- The solution currently has 544 passing Core, protocol, scanner/native, controller, security, profile, telemetry, pipeline, evaluator, acknowledgement, and action-coordinator tests.
 
-Last verified on 2026-07-20 (Session 2026-07-20b):
+Last verified on 2026-07-21 (Session 2026-07-21j):
 
 ```text
-dotnet build BotDs.sln --no-restore   → 0e 0w
-dotnet test BotDs.sln --no-restore    → 510/510 pass
+dotnet test BotDs.sln   → 579/579 pass
 ```
 
 ## Recommended Swarm After Restart
@@ -195,7 +305,7 @@ Despite Lua strings being immutable and the addon rebuilding the buffer on every
 
 ### SavedVariables as Scaffolding
 - Flush only on `/reloadui` or client exit (NOT periodic)
-- File path: `%USERPROFILE%\Documents\RIFT\SavedVariables\[Account]\[Shard]\[Char]\BotDsBridge.lua`
+- File path: `{MyDocuments}\RIFT\SavedVariables\[Account]\[Shard]\[Char]\BotDsBridge.lua` (shell MyDocuments / OneDrive — see `docs/rift-local-paths.md`)
 - Useful for: debug payload inspection, API surface exploration, config persistence
 - Not suitable for real-time telemetry
 
@@ -265,16 +375,161 @@ Items 3-12 of M8 require the game running with the BotDs addon: key calibration,
 
 ## Remaining Implementation
 
-The authoritative sequence and exit criteria are in `ROADMAP.md`. The active milestone is M8: Closed-Loop Live Combat. All M0-M7 milestones are complete.
+Authoritative detail is in `ROADMAP.md`. Summary: **M0–M7 complete; M2/M8 code-complete + live residual; M9 planned.**
 
-**M8 code-only work:** All complete. Acknowledgement kind validation added in Session 2026-07-20c.
+**Deferred live-only (blocks full M2/M8 Complete):**
+1. `/reloadui` with bridge 0.2.0 → stable Healthy + schema v2 names/CD/bar
+2. Dry-run Warrior comparison with **confirmed** keys (draft IDs already observed)
+3. Key calibration / binding verification soak
+4. Typed acknowledgement soak in live client
+5. Forced-failure matrix + 30-minute combat soak (≥200 acks)
+6. Combat-event acknowledgement section (protocol gap)
+7. M9 full acceptance (docs/publish partial; soak and browser matrix not done)
 
-**M8 requires live RIFT client for:**
-1. Key calibration and binding verification
-2. Typed acknowledgement testing (cast, cooldown, resource, aura, combat event)
-3. Failure scenario exercise (death, focus loss, alt-tab, target switch, etc.)
-4. 30-minute combat soak with 200+ acknowledged dispatches
-5. M9: Final acceptance, packaging, performance testing, documentation
+## Session 2026-07-21k: Handoff refresh
+
+Rewrote top-of-file resume snapshot: run commands, live checklist, milestone table, 579 tests, uncommitted-tree warning, next-step order. No product code change in this flush.
+
+## Session 2026-07-21j: Offline plan Phases 1–3 (+ packaging docs)
+
+Optimal offline order executed while RIFT unavailable:
+
+1. **DraftProfileBuilder** pure path + `DraftProfileAuthoringTests` (key hints, names, validate disabled)
+2. **DryRunMultiTickTests** — multi-tick fire/no-fire with real draft ability IDs
+3. **ReplayEnvelopeStore** load/save + size/version guards; fixture `tests/BotDs.Tests/Fixtures/replay-combat-cycle.json`
+4. Phase 4 host tests **deferred** (time-box); Phase 5 docs: `docs/first-run.md`, README/HANDOFF publish path fix
+
+**Live return:** `/reloadui` → Healthy abilities/bar → draft → confirm keys → DryRun against multi-tick expectations.
+
+## Session 2026-07-21i: Dual-schema + dashboard abilities/bar
+
+### Delivered
+- Parser accepts **schema 1 and 2** (v1 46-byte abilities without name; v2 80-byte + name + action bar) so live keeps working until `/reloadui`
+- Dashboard cards: **Abilities** table + **Action bar** (slot / suggested key / ability id)
+- **Draft profile from live** button; draft key hints from bar slots `1–12 → 1–0,-,=` (confirm in-game)
+- Suite **559/559**
+
+### Operator
+1. Prefer `/reloadui` for bridge **0.2.0** (names + honest CD ms + bar section)
+2. Use dashboard Abilities/Bar for calibration; fill remaining keys; DryRun only after confirm
+
+## Session 2026-07-21h: P0–P3 ability fidelity → DryRun → authoring → residual
+
+### P0 Ability field fidelity
+- Root cause: RIFT Detail times are **seconds**; bridge previously wrote raw values / treated as ms → CD always null; `usable` member is not the Detail signal — use **`not unusable`**
+- Schema **v2** ability records **80 bytes** with display **name**
+- Unit tests: `AbilityFidelityTests` (parse→map usable/CD/name + evaluator fire/no-fire)
+
+### P1 One-ability DryRun path
+- Shipped evaluator tests prove fire when usable+CD ready, no-fire on CD
+- Draft profile rule skeleton uses `abilityUsable` / `cooldownReady` / `targetHostile` (disabled + empty keys)
+
+### P2 Authoring
+- `GET /api/abilities` names; draft writes `.names.json` sidecar
+- **Action bar** section 0x0007 + `GET /api/action-bar` (slot→abilityId; **no keys invented**)
+
+### P3
+- Multi-ability rule order test; Live fail-closed suite still green
+- `dotnet publish` → `publish/`; `run-botds.cmd --publish`
+- Soak residual: see honest residual note (not M8 Fully Complete)
+
+### Operator
+1. `/reloadui` for bridge **0.2.0**
+2. Confirm `/api/abilities` shows names + non-null CD when casting
+3. Fill keys in draft profile before DryRun/Live
+
+## Session 2026-07-21g: Stability + draft profile from live abilities
+
+### Delivered
+- **Benign sequence gaps** (≤15) map to Healthy — small GC relocate gaps no longer Degraded
+- **Proactive cache refresh**: on sequence stagnation (~180 ms) try ±2 MB window only (no full-scan in proactive path — that stalled the loop)
+- **MaxCandidates** default 32→64
+- **GET `/api/abilities`** — full live ability inventory
+- **POST `/api/profiles/draft-from-telemetry`** — disabled draft with real ability IDs, empty keys (no invented combat data)
+- Status payload `abilitySummary` (count + sample)
+- Live draft written: `profiles/draft-warrior-45-live.json` (55 abilities, Warrior L45, disabled)
+- Suite **552/552**
+
+### Operator next
+1. Fill key bindings in `draft-warrior-45-live.json` for abilities you want to use (keys still empty)
+2. Enable only after calibration; keep profile disabled until ready
+3. Target a hostile NPC for readiness (friendly NPCs block arm)
+
+## Session 2026-07-21f: Live Healthy + ClientVersion + Continuity
+
+### Live evidence (2026-07-21, process `rift_x64` PID 31584, player Atank L45 warrior)
+- `GET /api/status` unauthenticated **200** (token auth removed earlier; loopback-only)
+- Provider **Healthy** with advancing sequence, `knownness` all known, **55 abilities**
+- Scanner partial-select on `CandidateLimitExceeded` works (limit hits still common from Lua GC string copies)
+- Occasional `ContinuityDegraded` from materialize throttle leaving sequence ahead of wire image — fixed in bridge 0.1.2 (always materialize with sequence)
+
+### Delivered this session
+- BotDsBridge **0.1.2**: `Inspect.System.Version()` is a **table** `{external,build,internal}` — publish `.external` (never `tostring(table)` which produced `table: 0x…`)
+- Always materialize scannable string with each frame write (no deferred materialize)
+- `ArmingReadinessService` reports live frame/player/provider even with no active profile
+- Field matrix updated for Version table shape; suite **551/551**
+- Deployed via `deploy-addon.cmd` to OneDrive AddOns path
+
+### Operator action required
+1. In RIFT: `/reloadui` (expect chat `BotDs Bridge v0.1.2` + corner label)
+2. Confirm `/api/status` `clientVersion` is a real external/build string, not `table: 0x…`
+3. Confirm Healthy is steady (few/no ContinuityDegraded flaps)
+
+### Still deferred (no invented Warrior combat data)
+- Real Warrior profile bindings/keys (disabled-warrior-45 stays placeholder)
+- M8 live arm/dry-run soak, binding calibration, 30-min soak
+- M9 packaging
+
+## Session 2026-07-21d: M2 live telemetry code-complete
+
+### Delivered
+- `ITelemetrySource` + `SnapshotTelemetrySource` DI
+- `TargetKnownness` + `GameInputReady` on `TelemetryFrame`; V5 flags bits 2–3; parser reserved mask bits 4–7
+- Mapper known-empty vs unknown lists; KnownNoTarget vs Unknown vs KnownTarget
+- BotDsBridge: known-no-target section emit; GameInputReady flags; `BotDsBridgeRegion` pin
+- Dashboard status `knownness` object
+- `M2LiveTelemetryTests` (7); full suite **544/544**
+- Live probe: provider not Healthy (0 candidates) → blocked residual documented
+
+## Session 2026-07-21c: M8 phase close-out (code-complete)
+
+### Delivered
+- `M8ClosedLoopGateTests`: Live gates (hotkey/bindings/collision), ack match vs non-match, timeout path (existing), pending-block, target/session invalidation, emergency-hotkey host stop wiring
+- Full suite **537/537**
+- Live probe: RIFT attached, provider not Healthy (0 V5 candidates) — blocked evidence retained for session; no invented Warrior fixture
+- ROADMAP M8 marked **Code-complete** with deferred live exit list (not falsely Complete)
+
+### Launch verification (loopback)
+- `GET /api/coordinator`: `outputMode=Disabled`, emergency hotkey `Ctrl+Shift+F12` `registered=true`
+- `GET /api/status`: scanner attached; provider Disconnected until addon publishes
+
+## Session 2026-07-21b: Emergency Hotkey + External Action Conflict
+
+### Delivered
+- `IEmergencyHotkey` / `WindowsEmergencyHotkey` / `FakeEmergencyHotkey` with `VirtualKeyMap` parsing
+- `EmergencyHotkeyHostedService` registers `Ctrl+Shift+F12` (configurable) at startup; triggers EmergencyStop + Disable
+- Live mode requires registered emergency hotkey (`BotDs:Action:RequireEmergencyHotkeyForLive`, default true)
+- Profile bindings that collide with the emergency hotkey block mode changes
+- `ExternalActionConflictDetector`: unexplained ability cooldown while armed → `StopReason.ExternalActionConflict`
+- Dashboard coordinator payload includes emergency hotkey registration status
+- Tests: **527/527**
+
+## Session 2026-07-21a: M8 Closed-Loop Code (Ack + Binding Verification)
+
+### Delivered
+- `ActionAcknowledgementMatcher` (Core): pure Cast/Cooldown/Resource/Aura matching against pre-dispatch baseline; session/target/source invalidation
+- `BindingVerificationTracker` (Core): Unverified/Verified/Mismatch per ability alias; Live blockers for required bindings
+- `ActionCoordinator`: captures baselines, observes pending every tick, records `Acknowledged` / `PendingInvalidated`, Live ack-timeout → `StopReason.ActionNotAcknowledged` + disable output; successful ack marks binding Verified; Live mode requires verified bindings (`BotDs:Action:RequireBindingVerificationForLive`, default true)
+- `EvaluatorLoop`: always observes pending ack/timeout even when evaluation produces no action
+- `ControllerStateMachine.Stop(StopReason, message)` for fail-closed non-estop stops
+- Dashboard: `GET /api/bindings`, `POST /api/control/bindings`, coordinator payload includes binding states
+- `run-botds.cmd` convenience launcher (repo root) + gitignored `botds.local.cmd` / `publish/`
+- Tests: 522 passing (was 512)
+
+### Live status at end of session
+- RIFT `rift_x64` running; scanner attaches
+- Provider Faulted / 0 valid V5 candidates until in-game `/reloadui` loads BotDsBridge
+- Dashboard restart via `run-botds.cmd` after this session
 
 ## Session 2026-07-20c: M8 Code Completion + M9 Prep
 
@@ -293,13 +548,13 @@ The authoritative sequence and exit criteria are in `ROADMAP.md`. The active mil
 
 ### Live Verification (Scanner + Dashboard)
 
-- BotDsBridge addon installed to `C:\Program Files (x86)\Glyph\Games\RIFT\Live\Interface\Addons\BotDsBridge\`
+- BotDsBridge addon installed to `%USERPROFILE%\OneDrive\Documents\RIFT\Interface\AddOns\BotDsBridge\` (shell MyDocuments; install-tree / non-OneDrive Documents alone are wrong on this machine)
 - Scanner successfully attaches to RIFT PID 31584 (`isAttached: true`, metrics flowing)
 - Provider status: Faulted — `/reloadui` needed in RIFT to load the addon and emit V5 frames
-- App running on `http://localhost:5068` with token `dev-test-token`
-- Start command: `BotDs__Scanner__ProcessId=31584 BotDs__Scanner__ProcessName=rift_x64 BotDs__Dashboard__ApiToken=dev-test-token ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://localhost:5068 dotnet run --no-build`
+- App: `http://localhost:5068` — loopback API, **no token auth**
+- Start: `run-botds.cmd` or `BotDs__Scanner__ProcessName=rift_x64 ASPNETCORE_URLS=http://localhost:5068 dotnet run --project src/BotDs.App`
 
-### Test Count: 512/512
+### Test Count: 544/544
 
 ## Quick Start / Setup Guide
 
@@ -314,22 +569,32 @@ dotnet restore BotDs.sln
 dotnet build BotDs.sln --no-restore
 dotnet test BotDs.sln --no-restore
 ```
-All 512 tests must pass, zero errors, zero warnings.
+All 527 tests must pass, zero errors, zero warnings.
 
 ### 2. Install the addon
-Copy `addons/BotDsBridge/BotDsBridge/` into RIFT's addon directory:
+Copy `addons/BotDsBridge/BotDsBridge/` into RIFT's **user** addon directory.
+Resolve the path from the shell known folder (often OneDrive-backed), not a
+hard-coded non-redirected `Documents` path:
 ```cmd
-mkdir "C:\Program Files (x86)\Glyph\Games\RIFT\Live\Interface\Addons\BotDsBridge"
-copy addons\BotDsBridge\BotDsBridge\* "C:\Program Files (x86)\Glyph\Games\RIFT\Live\Interface\Addons\BotDsBridge\"
+mkdir "%USERPROFILE%\OneDrive\Documents\RIFT\Interface\AddOns\BotDsBridge"
+copy addons\BotDsBridge\BotDsBridge\* "%USERPROFILE%\OneDrive\Documents\RIFT\Interface\AddOns\BotDsBridge\"
 ```
-In RIFT, type `/reloadui` to load the addon. You should see "BotDs Bridge" text in the top-left corner.
+Or use `Environment.GetFolderPath(MyDocuments)\RIFT\Interface\AddOns\` in tools.
+Verify siblings (JAB, ReaderBridge, etc.) exist in that folder before calling deploy done.
+Glyph `Live\Interface\Addons` alone is not the client load path. In RIFT, `/reloadui`;
+you should see "BotDs Bridge" top-left.
 
 ### 3. Launch the app
+Preferred convenience wrapper from repo root:
+```cmd
+run-botds.cmd --open
+```
+Optional personal overrides: create gitignored `botds.local.cmd` with tokens/process name.
+
+Manual equivalent:
 ```cmd
 cd src\BotDs.App
 set BotDs__Scanner__ProcessName=rift_x64
-set BotDs__Dashboard__ApiToken=your-token-here
-set BotDs__Dashboard__ControlToken=your-control-token
 set ASPNETCORE_URLS=http://localhost:5068
 dotnet run
 ```
@@ -341,13 +606,13 @@ dotnet run
 ```
 
 ### 4. Open the dashboard
-Navigate to `http://localhost:5068` and enter your API token.
+Navigate to `http://localhost:5068` (no token).
 
 ### 5. Publish (standalone)
 ```cmd
 dotnet publish src/BotDs.App/BotDs.App.csproj -c Release -r win-x64 --self-contained false -o publish/
 ```
-Run the published app: `cd publish && BotDs.exe`
+Run the published app: `run-botds.cmd --publish` (exe: `publish\BotDs.App.exe`)
 
 ## Inputs Still Needed
 
@@ -363,6 +628,8 @@ Do not invent these values. The initial fixture should remain disabled until the
 ## Useful Commands
 
 ```text
+deploy-addon.cmd
+dotnet run --project src/BotDs.Tools -- paths
 dotnet restore BotDs.sln
 dotnet build BotDs.sln --no-restore
 dotnet test BotDs.sln --no-restore

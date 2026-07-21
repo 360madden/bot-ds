@@ -4,7 +4,13 @@ Non-actuating RIFT addon that inspects every relevant addon API and dumps struct
 
 ## Install
 
-Copy `BotDsConformance` folder into `<RIFT>\Interface\Addons\`.
+Copy `BotDsConformance` folder into the **player** AddOns directory:
+
+`{MyDocuments}\RIFT\Interface\AddOns\BotDsConformance\`
+
+where MyDocuments is `Environment.SpecialFolder.MyDocuments` (on this machine:
+`C:\Users\mrkoo\OneDrive\Documents\...`). See `docs/rift-local-paths.md`.
+Do not use Glyph `Live\Interface\Addons` or a non-shell Documents path.
 
 ## Usage
 

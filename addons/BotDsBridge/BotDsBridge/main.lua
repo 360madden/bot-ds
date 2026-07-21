@@ -17,10 +17,26 @@
 -- CRC-last writes. Those guarantees require stable mutable backing storage and
 -- must be solved before this emitter is used for live telemetry.
 
+-- Keep in sync with RiftAddon.toc Version=
+local ADDON_VERSION = "0.2.0"
 local PROTOCOL_VERSION = 5
 local BUFFER_SLOT_SIZE = 8192
 local REGION_TOTAL_SIZE = 16400
 local SENTINEL_MAGIC = "BotDsV05"
+
+-- Chat/console output (RIFT: Command.Console.Display; print falls back to console).
+local function chat_print(message)
+    local line = tostring(message or "")
+    local ok = false
+    if type(Command) == "table"
+        and type(Command.Console) == "table"
+        and type(Command.Console.Display) == "function" then
+        ok = pcall(Command.Console.Display, "general", true, line, false)
+    end
+    if not ok and type(print) == "function" then
+        print(line)
+    end
+end
 
 -- Section types (uint16 LE)
 local SECTION_PROVIDER_INFO = 0x0001
@@ -29,6 +45,7 @@ local SECTION_TARGET        = 0x0003
 local SECTION_ABILITIES     = 0x0004
 local SECTION_PLAYER_AURAS  = 0x0005
 local SECTION_TARGET_AURAS  = 0x0006
+local SECTION_ACTION_BAR    = 0x0007
 
 -- Sections mask bits
 local MASK_PROVIDER_INFO = 0x00000001
@@ -37,6 +54,11 @@ local MASK_TARGET        = 0x00000004
 local MASK_ABILITIES     = 0x00000008
 local MASK_PLAYER_AURAS  = 0x00000010
 local MASK_TARGET_AURAS  = 0x00000020
+local MASK_ACTION_BAR    = 0x00000040
+
+-- Schema v2: ability records include display name (80-byte fixed)
+local SCHEMA_VERSION = 2
+local ABILITY_RECORD_SIZE = 80
 
 -- Header offsets within a buffer slot
 local HDR_SEQUENCE           = 0
@@ -178,31 +200,72 @@ local function crc32_combined(region, offset1, len1, offset2, len2)
 end
 
 ----------------------------------------------------------------------
--- Little-endian write helpers
+-- Byte-buffer helpers (performance-critical)
 --
--- WARNING: Lua strings are immutable. Every write helper below creates a new
--- string by concatenating `sub(1, pos-1)` + encoded bytes + `sub(pos+N)`.
--- write_frame calls these helpers thousands of times, so the temporary allocation
--- volume is much larger than one 16400-byte copy per frame. This intentionally
--- simple provider skeleton is not suitable for live publication. A future
--- transport must avoid the repeated copies and, more importantly, provide the
--- stable virtual address required by the external Reader.
---
--- All positions are 1-based (Lua string indexing convention).
+-- regionBytes is a 1-based array of 0..255 values. Mutating it is O(1) per
+-- write. We materialize ONE immutable string per publish for the external
+-- scanner (BotDsBridgeRegion). Do NOT rebuild 16KB via string.sub per byte.
 ----------------------------------------------------------------------
--- Write a single unsigned byte at position pos (1-based).
+-- Declared before helpers so closures capture this local (not a global).
+local regionBytes = nil
+local unpackValues = unpack or table.unpack
+
+local function bytes_to_string(bytes, fromIdx, toIdx)
+    local parts = {}
+    local chunk = {}
+    local n = 0
+    local partCount = 0
+    for i = fromIdx, toIdx do
+        n = n + 1
+        chunk[n] = bytes[i]
+        if n == 256 then
+            partCount = partCount + 1
+            parts[partCount] = string.char(unpackValues(chunk, 1, 256))
+            n = 0
+        end
+    end
+    if n > 0 then
+        partCount = partCount + 1
+        parts[partCount] = string.char(unpackValues(chunk, 1, n))
+    end
+    return table.concat(parts, "", 1, partCount)
+end
+
+-- In-place region writers (1-based positions into regionBytes)
+local function rb_u8(pos, val)
+    regionBytes[pos] = band(val, 0xFF)
+end
+
+local function rb_u16_le(pos, val)
+    regionBytes[pos] = band(val, 0xFF)
+    regionBytes[pos + 1] = band(rshift(val, 8), 0xFF)
+end
+
+local function rb_u32_le(pos, val)
+    regionBytes[pos] = band(val, 0xFF)
+    regionBytes[pos + 1] = band(rshift(val, 8), 0xFF)
+    regionBytes[pos + 2] = band(rshift(val, 16), 0xFF)
+    regionBytes[pos + 3] = band(rshift(val, 24), 0xFF)
+end
+
+local function rb_copy_string(pos, data)
+    for i = 1, #data do
+        regionBytes[pos + i - 1] = string.byte(data, i)
+    end
+end
+
+-- Legacy string helpers kept only for small section encoding (player/target).
+-- Prefer table builders for large records (abilities).
 local function write_u8(str, pos, val)
     return string.sub(str, 1, pos - 1) .. string.char(band(val, 0xFF)) .. string.sub(str, pos + 1)
 end
 
--- Write uint16 in little-endian order: low byte first, then high byte.
 local function write_u16_le(str, pos, val)
     return string.sub(str, 1, pos - 1)
         .. string.char(band(val, 0xFF), band(rshift(val, 8), 0xFF))
         .. string.sub(str, pos + 2)
 end
 
--- Write uint32 in little-endian order: bytes 0,1,2,3 from LSB to MSB.
 local function write_u32_le(str, pos, val)
     return string.sub(str, 1, pos - 1)
         .. string.char(
@@ -213,41 +276,61 @@ local function write_u32_le(str, pos, val)
         .. string.sub(str, pos + 4)
 end
 
--- Write int32 as its unsigned two's-complement bit pattern in LE.
--- Negative values are converted by adding 2^32, then written as uint32 LE.
 local function write_i32_le(str, pos, val)
-    -- Convert signed int32 to unsigned bit pattern
     if val < 0 then val = val + 0x100000000 end
     return write_u32_le(str, pos, val)
 end
 
--- Write a length-prefixed ASCII string: uint16 LE length, then raw bytes.
--- maxLen truncates the string if it exceeds the field limit.
-local function write_ascii(str, pos, text, maxLen)
-    maxLen = maxLen or #text
-    local result = write_u16_le(str, pos, #text)
-    pos = pos + 2
-    for i = 1, #text do
-        if i <= maxLen then
-            local b = string.byte(text, i)
-            result = write_u8(result, pos + i - 1, b)
-        end
-    end
-    return result
-end
-
--- Write a fixed-width ASCII field. Shorter strings are space-padded (0x20);
--- longer strings are truncated. Used for ability/aura ID fields.
 local function write_fixed_ascii(str, pos, text, fieldSize)
     local result = str
     for i = 1, fieldSize do
-        local b = 0x20 -- space padding
+        local b = 0x20
         if i <= #text then
             b = string.byte(text, i)
         end
         result = write_u8(result, pos + i - 1, b)
     end
     return result
+end
+
+-- RIFT Inspect.Ability.New.Detail returns times in *seconds*; wire uses milliseconds.
+local function seconds_to_ms(v)
+    if type(v) ~= "number" then return -1 end
+    if v < 0 then return -1 end
+    -- Cap at ~24d of ms so int32 stays positive after floor
+    local ms = math.floor(v * 1000 + 0.5)
+    if ms > 2147483647 then return 2147483647 end
+    return ms
+end
+
+-- Build fixed ability record (schema v2, 80 bytes) without per-byte string mutation.
+-- Layout: id:32, cdRemain:i32, cdDur:i32, castTime:i32, flags:u8, cost:u8, nameLen:u16, name:32
+local function build_ability_record(abilityId, cdRemainMs, cdDurMs, castTimeMs, flags, resourceCost, name)
+    local rec = {}
+    local id = tostring(abilityId or "")
+    for i = 1, 32 do
+        if i <= #id then rec[i] = string.byte(id, i) else rec[i] = 0x20 end
+    end
+    local function put_i32(off, val)
+        if val < 0 then val = val + 0x100000000 end
+        rec[off] = band(val, 0xFF)
+        rec[off + 1] = band(rshift(val, 8), 0xFF)
+        rec[off + 2] = band(rshift(val, 16), 0xFF)
+        rec[off + 3] = band(rshift(val, 24), 0xFF)
+    end
+    put_i32(33, cdRemainMs or -1)
+    put_i32(37, cdDurMs or -1)
+    put_i32(41, castTimeMs or -1)
+    rec[45] = band(flags or 0, 0xFF)
+    rec[46] = band(resourceCost or 0, 0xFF)
+    local n = tostring(name or "")
+    if #n > 32 then n = string.sub(n, 1, 32) end
+    rec[47] = band(#n, 0xFF)
+    rec[48] = band(rshift(#n, 8), 0xFF)
+    for i = 1, 32 do
+        if i <= #n then rec[48 + i] = string.byte(n, i) else rec[48 + i] = 0 end
+    end
+    return string.char(unpackValues(rec, 1, ABILITY_RECORD_SIZE))
 end
 
 ----------------------------------------------------------------------
@@ -266,12 +349,31 @@ end
 -- `sequence` starts at 1 and increments monotonically per frame. A reset to 1
 -- with a new sessionId signals a session restart to the Reader.
 ----------------------------------------------------------------------
-local region = nil         -- the 16400-byte backing string
+-- regionBytes declared above with write helpers
+local region = nil         -- materialized string for scanner (updated each publish)
 local sessionId = ""       -- 16-byte binary UUID
 local sequence = 0
 local writeBufferIndex = 0 -- 0 = Buffer A, 1 = Buffer B
 local heartbeatIntervalMs = 50
 local maxTelemetryAgeMs = 500
+-- Publish cadence: ~10 Hz wire publish (balances freshness vs GC copies in process memory).
+-- Sequence and the scannable string MUST advance together — throttling materialize while
+-- still incrementing sequence caused ContinuityDegraded gaps (~20 seq) on every relocate.
+local PUBLISH_INTERVAL_S = 0.10
+local lastPublishTime = 0
+-- Heavy inventory Inspects are slower (abilities/auras)
+local INVENTORY_INTERVAL_S = 0.50
+local lastInventoryTime = 0
+local cachedAbilityBytes = nil
+local cachedAbilityKnown = false
+local cachedPlayerAuraBytes = nil
+local cachedPlayerAuraKnown = false
+local cachedTargetAuraBytes = nil
+local cachedTargetAuraKnown = false
+local cachedActionBarBytes = nil
+local cachedActionBarKnown = false
+-- Inspect.System.Version() returns a table { build, external, internal } — never tostring(table).
+local cachedClientVersion = nil
 
 ----------------------------------------------------------------------
 -- Initialization
@@ -306,24 +408,40 @@ local function generate_uuid_binary()
     return string.char(unpackValues(bytes))
 end
 
--- Allocate the full 16400-byte region string (zero-filled) and write the
--- sentinel header. Its bytes are retained in each later logical image and are
--- the scan target used by the C# Reader. Immutable string replacement means
--- the allocation address itself may still change.
--- See PROTOCOL.md §2 for the sentinel layout.
-local function init_region()
-    region = string.rep("\0", REGION_TOTAL_SIZE)
+-- Materialize the scannable string after every completed frame write so the
+-- external scanner observes the same sequence high-water mark as regionBytes.
+local function materialize_region_string()
+    region = bytes_to_string(regionBytes, 1, REGION_TOTAL_SIZE)
+    BotDsBridgeRegion = region
+end
 
-    -- Write sentinel magic
-    for i = 1, #SENTINEL_MAGIC do
-        region = write_u8(region, SENTINEL_MAGIC_OFFSET + i, string.byte(SENTINEL_MAGIC, i))
+local function init_region()
+    regionBytes = {}
+    for i = 1, REGION_TOTAL_SIZE do
+        regionBytes[i] = 0
     end
-    region = write_u32_le(region, SENTINEL_MAGIC_OFFSET + SENTINEL_TOTAL_SIZE + 1, REGION_TOTAL_SIZE)
-    region = write_u32_le(region, SENTINEL_MAGIC_OFFSET + SENTINEL_BUFFER_SLOT_SIZE + 1, BUFFER_SLOT_SIZE)
+
+    for i = 1, #SENTINEL_MAGIC do
+        rb_u8(SENTINEL_MAGIC_OFFSET + i, string.byte(SENTINEL_MAGIC, i))
+    end
+    rb_u32_le(SENTINEL_MAGIC_OFFSET + SENTINEL_TOTAL_SIZE + 1, REGION_TOTAL_SIZE)
+    rb_u32_le(SENTINEL_MAGIC_OFFSET + SENTINEL_BUFFER_SLOT_SIZE + 1, BUFFER_SLOT_SIZE)
 
     sessionId = generate_uuid_binary()
     sequence = 0
     writeBufferIndex = 0
+    lastPublishTime = 0
+    lastInventoryTime = 0
+    cachedAbilityBytes = nil
+    cachedAbilityKnown = false
+    cachedPlayerAuraBytes = nil
+    cachedPlayerAuraKnown = false
+    cachedTargetAuraBytes = nil
+    cachedTargetAuraKnown = false
+    cachedActionBarBytes = nil
+    cachedActionBarKnown = false
+    cachedClientVersion = nil
+    materialize_region_string()
 end
 
 ----------------------------------------------------------------------
@@ -360,18 +478,53 @@ end
 --     NOT epoch time; the Reader uses it for candidate ordering while freshness
 --     is measured on the Reader's own monotonic clock
 --   - MaxTelemetryAgeMs (uint32 LE): emitter's acceptable staleness window
---   - ClientVersion: Inspect.System.Version() string (currently empty — TODO)
---   - SchemaVersion: always 1 (the section layout version within protocol v5)
+--   - ClientVersion: Inspect.System.Version().external (prefer), else build/internal
+--   - SchemaVersion: SCHEMA_VERSION (2 = ability name + action bar)
 --   - Reserved: must be 0
 --
 -- Always returns (section_bytes, MASK_PROVIDER_INFO) regardless of state.
+
+-- Resolve and cache client version once per session. Live clients return a table
+-- { build, external, internal }; tostring(table) yields "table: 0x..." and must
+-- never be published (observed live as unstable garbage version strings).
+local function resolve_client_version()
+    if cachedClientVersion ~= nil then
+        return cachedClientVersion
+    end
+    local version = ""
+    local ok, ver = pcall(Inspect.System.Version)
+    if ok and ver ~= nil then
+        if type(ver) == "string" then
+            version = ver
+        elseif type(ver) == "table" then
+            local external = ver.external
+            local build = ver.build
+            local internal = ver.internal
+            if type(external) == "string" and #external > 0 then
+                version = external
+            elseif type(build) == "string" and #build > 0 then
+                version = build
+            elseif type(internal) == "string" and #internal > 0 then
+                version = internal
+            elseif type(external) == "number" or type(build) == "number" or type(internal) == "number" then
+                -- Some clients may return numeric members; prefer external then build.
+                local n = external or build or internal
+                version = tostring(n)
+            end
+        end
+    end
+    -- Protocol max client version length is 128 ASCII bytes.
+    if #version > 128 then
+        version = string.sub(version, 1, 128)
+    end
+    cachedClientVersion = version
+    return version
+end
+
 local function encode_provider_info()
     local buf = ""
     local producerFrameMs = math.floor((Inspect.Time.Frame() or 0) * 1000)
-
-    local clientVersion = ""
-    local ok, ver = pcall(Inspect.System.Version)
-    if ok and ver then clientVersion = tostring(ver) end
+    local clientVersion = resolve_client_version()
 
     local pos = 1
     -- SessionId: 16 bytes
@@ -393,8 +546,8 @@ local function encode_provider_info()
         buf = buf .. string.char(string.byte(clientVersion, i))
     end
     pos = pos + #clientVersion
-    -- SchemaVersion: 1 byte
-    buf = buf .. string.char(1)
+    -- SchemaVersion: 1 byte (v2 = ability name field)
+    buf = buf .. string.char(SCHEMA_VERSION)
     pos = pos + 1
     -- Reserved: 1 byte (MUST be 0)
     buf = buf .. string.char(0)
@@ -418,8 +571,14 @@ end
 -- caller skips the section entirely (no TLV entry emitted).
 local function encode_unit_state(unitSpecifier)
     -- unitSpecifier: e.g. "player", "player.target"
+    -- Returns: section_bytes, emit_section
+    -- For player.target:
+    --   emit_section=false → TargetKnownness.Unknown (inspection incomplete)
+    --   emit_section=true + flags without IsAvailable → KnownNoTarget
+    --   emit_section=true + IsAvailable → KnownTarget
     local buf = ""
     local avail = false
+    local emit = false
     local id = ""
     local name = ""
     local level = -1
@@ -437,9 +596,16 @@ local function encode_unit_state(unitSpecifier)
     local castDur = -1
     local castFlags = 0
 
+    local isTarget = (unitSpecifier == "player.target")
     local ok, detail = pcall(Inspect.Unit.Detail, unitSpecifier)
-    if ok and detail then
+    if not ok then
+        -- pcall failure: unknown for targets (omit section); player stays omitted
+        return "", false
+    end
+
+    if detail then
         avail = true
+        emit = true
         flags = 0x04 -- UnitFlagIsAvailable
         id = tostring(detail.id or "")
         name = detail.name or ""
@@ -479,6 +645,17 @@ local function encode_unit_state(unitSpecifier)
             if castbar.channel then castFlags = bor(castFlags, 0x01) end -- CastFlagIsChannel
             if castbar.uninterruptible then castFlags = bor(castFlags, 0x02) end -- CastFlagIsUninterruptible
         end
+    elseif isTarget then
+        -- Successful inspect with nil detail: known no selected target (M2).
+        emit = true
+        avail = false
+        flags = 0 -- IsAvailable clear
+    else
+        return "", false
+    end
+
+    if not emit then
+        return "", false
     end
 
     -- Id
@@ -531,66 +708,130 @@ local function encode_unit_state(unitSpecifier)
     -- CastFlags
     buf = write_u8(buf, pos, castFlags)
 
-    return buf, avail
+    -- emit_section true even for known-no-target (avail may be false)
+    return buf, emit
 end
 
 -- Build the abilities list section (PROTOCOL.md §4.3).
 --
--- Each ability record is a fixed 46 bytes for efficient random-access parsing:
--- the C# Reader can compute record offsets without per-record length scanning.
--- AbilityId is space-padded to 32 bytes; a first byte of '\0' marks an empty slot.
--- Count is capped at 128 to keep total section size predictable.
+-- Ability records are fixed 80-byte schema-v2 layouts (see PROTOCOL.md §4.3).
+-- RIFT Detail API: times are seconds; `unusable` is the primary usability signal
+-- (there is no reliable `usable` member in Inspect.Ability.New.Detail docs).
 --
--- Returns (section_bytes, is_known). A successful inventory query sets is_known
--- even when count is zero, allowing the Reader to distinguish known-empty from
--- unavailable telemetry. The current stub leaves is_known false.
+-- Returns (section_bytes, is_known).
 local function encode_abilities()
-    local buf = ""
     local count = 0
     local isKnown = false
-    local records = ""
+    local parts = {}
 
     local ok, ids = pcall(Inspect.Ability.New.List)
     if ok and ids then
         local complete = true
-        for _, abilityId in ipairs(ids) do
-            if count >= 128 then
+        -- ipairs may miss dict-style id maps used by some clients; also try pairs
+        local iterList = ids
+        if type(ids) == "table" and ids[1] == nil then
+            iterList = {}
+            for k, v in pairs(ids) do
+                if v then iterList[#iterList + 1] = (type(k) == "string" and k) or v end
+            end
+        end
+        for _, abilityId in ipairs(iterList) do
+            if count >= 64 then
+                -- Cap for FPS: full book is too expensive every inventory tick
                 complete = false
                 break
             end
             local dok, detail = pcall(Inspect.Ability.New.Detail, abilityId)
             if dok and detail then
-                local rec = string.rep("\0", 46)
-                rec = write_fixed_ascii(rec, 1, tostring(detail.id or abilityId), 32)
-                rec = write_i32_le(rec, 33, detail.currentCooldownRemaining or -1)
-                rec = write_i32_le(rec, 37, detail.currentCooldownDuration or -1)
-                rec = write_i32_le(rec, 41, detail.castingTime or -1)
-                local aFlags = 0
-                if detail.usable then
-                    aFlags = bor(aFlags, 0x01) -- available
-                    aFlags = bor(aFlags, 0x02) -- usable
+                -- Available = we resolved detail for a listed ability
+                local aFlags = 0x01
+                local isPassive = detail.passive and true or false
+                if isPassive then
+                    aFlags = bor(aFlags, 0x08)
+                else
+                    -- usable when not marked unusable (and not passive cast)
+                    if not detail.unusable then
+                        aFlags = bor(aFlags, 0x02)
+                    end
                 end
-                if detail.unusable then
-                    -- still available (in inventory) but not usable right now
-                    aFlags = bor(aFlags, 0x01)
+                -- explicit usable true from events/clients that expose it
+                if detail.usable == true then
+                    aFlags = bor(aFlags, 0x02)
+                elseif detail.usable == false then
+                    aFlags = band(aFlags, 0xFD) -- clear usable bit
                 end
-                if not detail.outOfRange then aFlags = bor(aFlags, 0x04) end -- inRange
-                if detail.passive then aFlags = bor(aFlags, 0x08) end
+                if not detail.outOfRange then aFlags = bor(aFlags, 0x04) end
                 if detail.channeled then aFlags = bor(aFlags, 0x10) end
-                rec = write_u8(rec, 45, aFlags)
-                rec = write_u8(rec, 46, 0)
-                records = records .. rec
+
+                local cost = 0
+                if type(detail.costPower) == "number" then cost = detail.costPower
+                elseif type(detail.costEnergy) == "number" then cost = detail.costEnergy
+                elseif type(detail.costMana) == "number" then cost = detail.costMana
+                end
+                if cost < 0 then cost = 0 end
+                if cost > 255 then cost = 255 end
+
+                parts[#parts + 1] = build_ability_record(
+                    detail.id or abilityId,
+                    seconds_to_ms(detail.currentCooldownRemaining),
+                    seconds_to_ms(detail.currentCooldownDuration or detail.cooldown),
+                    seconds_to_ms(detail.castingTime),
+                    aFlags,
+                    cost,
+                    detail.name or "")
                 count = count + 1
             else
                 complete = false
             end
         end
-        isKnown = complete
+        isKnown = complete or count > 0
     end
 
-    buf = write_u16_le(buf, 1, count)
-    buf = buf .. records
-    return buf, isKnown
+    local header = string.char(band(count, 0xFF), band(rshift(count, 8), 0xFF))
+    return header .. table.concat(parts), isKnown
+end
+
+-- Action bar observation for key calibration (does not invent keys).
+-- Wire: page:u8, count:u8, then count × (slot:u8 + abilityId:32 space-padded).
+local function encode_action_bar()
+    local page = 0
+    local pok, pval = pcall(function()
+        if type(Action) == "table" and type(Action.Bar) == "table"
+            and type(Action.Bar.Page) == "table" and type(Action.Bar.Page.Get) == "function" then
+            return Action.Bar.Page.Get()
+        end
+        return nil
+    end)
+    if pok and type(pval) == "number" then page = math.floor(pval) end
+    if page < 0 then page = 0 end
+    if page > 255 then page = 255 end
+
+    local slots = {}
+    local slotCount = 0
+    for slot = 1, 12 do
+        local aok, action = pcall(function()
+            if type(Action) == "table" and type(Action.Get) == "function" then
+                return Action.Get(slot)
+            end
+            return nil
+        end)
+        local id = ""
+        if aok and type(action) == "table" then
+            local t = action.type
+            if t == "ability" or t == nil or t == "Ability" then
+                if action.id then id = tostring(action.id) end
+            end
+        end
+        local rec = { band(slot, 0xFF) }
+        for i = 1, 32 do
+            if i <= #id then rec[i + 1] = string.byte(id, i) else rec[i + 1] = 0x20 end
+        end
+        slots[#slots + 1] = string.char(unpackValues(rec, 1, 33))
+        slotCount = slotCount + 1
+    end
+
+    local header = string.char(band(page, 0xFF), band(slotCount, 0xFF))
+    return header .. table.concat(slots), true
 end
 
 -- Build an auras list section (PROTOCOL.md §4.4).
@@ -671,55 +912,60 @@ end
 -- Sections are emitted in ascending mask order: ProviderInfo → Player → Target →
 -- Abilities → PlayerAuras → TargetAuras (bits 0–5). This ordering is fixed so
 -- the Reader can validate section sequence.
-local function build_payload()
-    local payload = ""
+local function build_payload(refreshInventory)
     local sectionsMask = 0
+    local chunks = {}
 
-    -- Collect sections
-    local sections = {}
+    local function add_section(stype, data, mask)
+        chunks[#chunks + 1] = string.char(
+            band(stype, 0xFF), band(rshift(stype, 8), 0xFF),
+            band(#data, 0xFF), band(rshift(#data, 8), 0xFF))
+        chunks[#chunks + 1] = data
+        sectionsMask = bor(sectionsMask, mask)
+    end
 
-    -- ProviderInfo (always included)
     local providerBytes, providerMask = encode_provider_info()
-    table.insert(sections, {type = SECTION_PROVIDER_INFO, data = providerBytes, mask = providerMask})
+    add_section(SECTION_PROVIDER_INFO, providerBytes, providerMask or MASK_PROVIDER_INFO)
 
-    -- Player
     local playerBytes, playerAvail = encode_unit_state("player")
     if playerAvail then
-        table.insert(sections, {type = SECTION_PLAYER, data = playerBytes, mask = MASK_PLAYER})
+        add_section(SECTION_PLAYER, playerBytes, MASK_PLAYER)
     end
 
-    -- Target
     local targetBytes, targetAvail = encode_unit_state("player.target")
     if targetAvail then
-        table.insert(sections, {type = SECTION_TARGET, data = targetBytes, mask = MASK_TARGET})
+        add_section(SECTION_TARGET, targetBytes, MASK_TARGET)
     end
 
-    -- Abilities
-    local abilityBytes, abilityAvail = encode_abilities()
-    if abilityAvail then
-        table.insert(sections, {type = SECTION_ABILITIES, data = abilityBytes, mask = MASK_ABILITIES})
+    if refreshInventory then
+        local abilityBytes, abilityKnown = encode_abilities()
+        cachedAbilityBytes = abilityBytes
+        cachedAbilityKnown = abilityKnown
+        local pAuraBytes, pAuraKnown = encode_auras("player")
+        cachedPlayerAuraBytes = pAuraBytes
+        cachedPlayerAuraKnown = pAuraKnown
+        local tAuraBytes, tAuraKnown = encode_auras("player.target")
+        cachedTargetAuraBytes = tAuraBytes
+        cachedTargetAuraKnown = tAuraKnown
+        local barBytes, barKnown = encode_action_bar()
+        cachedActionBarBytes = barBytes
+        cachedActionBarKnown = barKnown
     end
 
-    -- Player Auras
-    local pAuraBytes, pAuraAvail = encode_auras("player")
-    if pAuraAvail then
-        table.insert(sections, {type = SECTION_PLAYER_AURAS, data = pAuraBytes, mask = MASK_PLAYER_AURAS})
+    if cachedAbilityKnown and cachedAbilityBytes then
+        add_section(SECTION_ABILITIES, cachedAbilityBytes, MASK_ABILITIES)
+    end
+    if cachedPlayerAuraKnown and cachedPlayerAuraBytes then
+        add_section(SECTION_PLAYER_AURAS, cachedPlayerAuraBytes, MASK_PLAYER_AURAS)
+    end
+    if cachedTargetAuraKnown and cachedTargetAuraBytes then
+        add_section(SECTION_TARGET_AURAS, cachedTargetAuraBytes, MASK_TARGET_AURAS)
+    end
+    if cachedActionBarKnown and cachedActionBarBytes then
+        add_section(SECTION_ACTION_BAR, cachedActionBarBytes, MASK_ACTION_BAR)
     end
 
-    -- Target Auras
-    local tAuraBytes, tAuraAvail = encode_auras("player.target")
-    if tAuraAvail then
-        table.insert(sections, {type = SECTION_TARGET_AURAS, data = tAuraBytes, mask = MASK_TARGET_AURAS})
-    end
-
-    for _, section in ipairs(sections) do
-        payload = write_u16_le(payload, #payload + 1, section.type)
-        payload = write_u16_le(payload, #payload + 1, #section.data)
-        payload = payload .. section.data
-        sectionsMask = bor(sectionsMask, section.mask)
-    end
-
-    return payload, sectionsMask
+    return table.concat(chunks), sectionsMask
 end
 
 -- Write one complete frame into the specified buffer slot.
@@ -738,7 +984,18 @@ end
 -- The CRC covers exactly header bytes 0–23 (Sequence through Reserved, 24 bytes)
 -- plus the full PayloadLength bytes, per PROTOCOL.md §5.2. The CRC field itself
 -- (bytes 24–27) is excluded from coverage (zeroed during computation).
-local function write_frame(region, bufferOffset)
+local function crc32_bytes(startPos, len1, start2, len2)
+    local crc = 0xFFFFFFFF
+    for i = 0, len1 - 1 do
+        crc = crc32_update(crc, regionBytes[startPos + i])
+    end
+    for i = 0, len2 - 1 do
+        crc = crc32_update(crc, regionBytes[start2 + i])
+    end
+    return bxor(crc, 0xFFFFFFFF)
+end
+
+local function write_frame(bufferOffset, inputReady, refreshInventory)
     sequence = sequence + 1
     local frameTime = math.floor((Inspect.Time.Frame() or 0) * 1000)
     local isSecure = false
@@ -746,57 +1003,46 @@ local function write_frame(region, bufferOffset)
     local ok, sec = pcall(Inspect.System.Secure)
     if ok then isSecure = sec or false end
 
-    local payload, sectionsMask = build_payload()
+    local payload, sectionsMask = build_payload(refreshInventory)
     local payloadLength = #payload
 
     if payloadLength > BUFFER_SLOT_SIZE - HEADER_SIZE then
         sequence = sequence - 1
-        return region
+        return
     end
 
-    -- Write header
-    region = write_u32_le(region, bufferOffset + HDR_SEQUENCE + 1, sequence)
-    region = write_u32_le(region, bufferOffset + HDR_PRODUCER_FRAME_MS + 1, frameTime)
-    region = write_u32_le(region, bufferOffset + HDR_SECTIONS_MASK + 1, sectionsMask)
-    region = write_u32_le(region, bufferOffset + HDR_HEARTBEAT_INTERVAL + 1, heartbeatIntervalMs)
-    region = write_u32_le(region, bufferOffset + HDR_PAYLOAD_LENGTH + 1, payloadLength)
-    region = write_u8(region, bufferOffset + HDR_PROTOCOL_VERSION + 1, PROTOCOL_VERSION)
+    local base = bufferOffset + 1 -- 1-based index of slot start in regionBytes
+
+    rb_u32_le(base + HDR_SEQUENCE, sequence)
+    rb_u32_le(base + HDR_PRODUCER_FRAME_MS, frameTime)
+    rb_u32_le(base + HDR_SECTIONS_MASK, sectionsMask)
+    rb_u32_le(base + HDR_HEARTBEAT_INTERVAL, heartbeatIntervalMs)
+    rb_u32_le(base + HDR_PAYLOAD_LENGTH, payloadLength)
+    rb_u8(base + HDR_PROTOCOL_VERSION, PROTOCOL_VERSION)
 
     local flags = 0
-    -- Heartbeat classification: a frame with only ProviderInfo (no game-state
-    -- sections) is marked as a heartbeat. The Reader uses heartbeats for
-    -- freshness/liveness checks only — it MUST NOT treat them as valid game
-    -- state updates. Heartbeat frames still increment Sequence.
     if sectionsMask == MASK_PROVIDER_INFO then
         flags = bor(flags, 0x01)
     end
     if isSecure then
         flags = bor(flags, 0x02)
     end
-    region = write_u8(region, bufferOffset + HDR_FLAGS + 1, flags)
-    region = write_u16_le(region, bufferOffset + HDR_RESERVED + 1, 0)
-
-    -- Write payload
-    for i = 1, payloadLength do
-        region = write_u8(region, bufferOffset + PAYLOAD_OFFSET + i, string.byte(payload, i))
+    flags = bor(flags, 0x08) -- GameInputReadyKnown
+    if inputReady then
+        flags = bor(flags, 0x04) -- GameInputReady
     end
+    rb_u8(base + HDR_FLAGS, flags)
+    rb_u16_le(base + HDR_RESERVED, 0)
 
-    -- Zero remaining payload space (clean up from previous writes)
-    for i = payloadLength + 1, BUFFER_SLOT_SIZE - HEADER_SIZE do
-        region = write_u8(region, bufferOffset + PAYLOAD_OFFSET + i, 0)
-    end
+    -- Payload only (CRC covers PayloadLength — no need to zero the rest of the slot)
+    rb_copy_string(base + PAYLOAD_OFFSET, payload)
 
-    -- Zero CRC field, then compute and write CRC
-    region = write_u32_le(region, bufferOffset + HDR_CRC32 + 1, 0)
+    rb_u32_le(base + HDR_CRC32, 0)
+    local crc = crc32_bytes(base + HDR_SEQUENCE, HDR_CRC32, base + PAYLOAD_OFFSET, payloadLength)
+    rb_u32_le(base + HDR_CRC32, crc)
 
-    -- CRC covers header bytes 0..23 + full payload
-    local crc = crc32_combined(region,
-        bufferOffset + 1, HDR_CRC32,                         -- header covered portion (offset 0..23)
-        bufferOffset + PAYLOAD_OFFSET + 1, payloadLength)    -- payload
-
-    region = write_u32_le(region, bufferOffset + HDR_CRC32 + 1, crc)
-
-    return region
+    -- Always publish the wire image with this sequence (no deferred materialize).
+    materialize_region_string()
 end
 
 ----------------------------------------------------------------------
@@ -819,20 +1065,35 @@ end
 local indicatorFrame = nil
 local gameInputReady = true
 
--- Check if game input is ready (not in chat, keybind screen, or modal dialog)
+-- Check if game input is ready (not in chat, keybind screen, or modal dialog).
+-- Must not index optional UI tables at the call site: pcall(UI.Textfield.Focus)
+-- still evaluates UI.Textfield before entering pcall and errors when nil.
 local function check_game_input_ready()
-    -- Check chat focus: try to get the focused UI textfield
-    local ok, focus = pcall(UI.Textfield.Focus)
-    if ok and focus then
-        return false -- user is typing in a text field
+    local ok, ready = pcall(function()
+        -- Chat / edit focus (API may be absent on some client builds)
+        if type(UI) == "table" and type(UI.Textfield) == "table"
+            and type(UI.Textfield.Focus) == "function" then
+            local focus = UI.Textfield.Focus()
+            if focus then
+                return false
+            end
+        end
+        -- Optional alternate focus probe used by some clients
+        if type(UI) == "table" and type(UI.Textfield) == "table"
+            and type(UI.Textfield.GetFocus) == "function" then
+            local focus = UI.Textfield.GetFocus()
+            if focus then
+                return false
+            end
+        end
+        return true
+    end)
+    if not ok then
+        -- Unknown input readiness: prefer ready so we still emit frames;
+        -- C# treats nil/unknown separately when flags are known.
+        return true
     end
-    -- Check secure mode
-    local sok, sec = pcall(Inspect.System.Secure)
-    if sok and sec then
-        -- Secure mode usually means combat/keybind screens
-        -- We can still observe but input may be restricted
-    end
-    return true
+    return ready and true or false
 end
 
 -- Update UI indicator color based on state
@@ -849,10 +1110,23 @@ local function update_indicator()
 end
 
 local function on_update_begin()
+    -- Throttle: full publish is too expensive every render frame (~60Hz+).
+    local now = Inspect.Time.Frame() or 0
+    if lastPublishTime > 0 and (now - lastPublishTime) < PUBLISH_INTERVAL_S then
+        return
+    end
+    lastPublishTime = now
+
     gameInputReady = check_game_input_ready()
 
-    if not region then
+    if not regionBytes then
         init_region()
+    end
+
+    local refreshInventory = (lastInventoryTime == 0)
+        or ((now - lastInventoryTime) >= INVENTORY_INTERVAL_S)
+    if refreshInventory then
+        lastInventoryTime = now
     end
 
     local bufferOffset
@@ -864,7 +1138,7 @@ local function on_update_begin()
         writeBufferIndex = 0
     end
 
-    region = write_frame(region, bufferOffset)
+    write_frame(bufferOffset, gameInputReady, refreshInventory)
     update_indicator()
 end
 
@@ -896,10 +1170,10 @@ local function on_addon_load()
         local fok, frame = pcall(UI.CreateFrame, "Text", "BotDsStatus", ctx)
         if fok and frame then
             pcall(frame.SetPoint, frame, "TOPLEFT", "UIParent", "TOPLEFT", 10, 10)
-            pcall(frame.SetWidth, frame, 120)
+            pcall(frame.SetWidth, frame, 160)
             pcall(frame.SetHeight, frame, 20)
             pcall(frame.SetBackgroundColor, frame, 0, 0, 0, 0.6)
-            pcall(frame.SetText, frame, "BotDs Bridge")
+            pcall(frame.SetText, frame, "BotDs Bridge v" .. ADDON_VERSION)
             pcall(frame.SetFontColor, frame, 0.3, 1.0, 0.3, 1.0)
             indicatorFrame = frame
         end
@@ -916,6 +1190,10 @@ local function on_addon_load()
     end
 
     on_update_begin()
+
+    chat_print(string.format(
+        "BotDs Bridge v%s initialized (protocol v%d).",
+        ADDON_VERSION, PROTOCOL_VERSION))
 end
 
 -- Entry point (RIFT addon loader calls this after loading the file)

@@ -63,7 +63,9 @@ public static class V5HealthMapper
                 PlayerAuras: [],
                 TargetAuras: [],
                 IsPlayerAurasKnown: false,
-                IsTargetAurasKnown: false);
+                IsTargetAurasKnown: false,
+                TargetKnownness: TargetKnownness.Unknown,
+                GameInputReady: null);
         }
 
         ProviderStatus status = ToProviderStatus(result, receivedAt, sourceGeneration, gameStateEvidenceAge);
@@ -92,6 +94,31 @@ public static class V5HealthMapper
         bool playerAurasKnown = frame.Header.HasSection(V5Constants.MaskPlayerAuras);
         bool targetAurasKnown = frame.Header.HasSection(V5Constants.MaskTargetAuras);
 
+        // Target section present + unavailable unit ⇒ KnownNoTarget; present + mapped ⇒ KnownTarget;
+        // section omitted ⇒ Unknown (inspection incomplete / not published).
+        TargetKnownness targetKnownness;
+        if (!frame.Header.HasSection(V5Constants.MaskTarget))
+            targetKnownness = TargetKnownness.Unknown;
+        else if (target is null)
+            targetKnownness = TargetKnownness.KnownNoTarget;
+        else
+            targetKnownness = TargetKnownness.KnownTarget;
+
+        bool? gameInputReady = frame.Header.IsGameInputReadyKnown
+            ? frame.Header.IsGameInputReady
+            : null;
+
+        bool actionBarKnown = frame.Header.HasSection(V5Constants.MaskActionBar);
+        IReadOnlyList<ActionBarSlotState>? actionBarSlots = null;
+        int? actionBarPage = null;
+        if (actionBarKnown && frame.ActionBar is not null)
+        {
+            actionBarPage = frame.ActionBar.Page;
+            actionBarSlots = frame.ActionBar.Slots
+                .Select(s => new ActionBarSlotState(s.Slot, s.AbilityId))
+                .ToList();
+        }
+
         return new TelemetryFrame(
             Provider: status,
             Player: player,
@@ -101,7 +128,12 @@ public static class V5HealthMapper
             TargetAuras: targetAuras.AsReadOnly(),
             IsAbilitiesKnown: abilitiesKnown,
             IsPlayerAurasKnown: playerAurasKnown,
-            IsTargetAurasKnown: targetAurasKnown);
+            IsTargetAurasKnown: targetAurasKnown,
+            TargetKnownness: targetKnownness,
+            GameInputReady: gameInputReady,
+            ActionBarSlots: actionBarSlots,
+            IsActionBarKnown: actionBarKnown,
+            ActionBarPage: actionBarPage);
     }
 
     // ── Individual field mappers ──────────────────────────────
@@ -169,9 +201,11 @@ public static class V5HealthMapper
     {
         // Protocol-guaranteed flags: the ability Flags byte is always present
         // in the fixed-size record. Map explicit false to false (not null).
+        // Prefer wire name when non-empty; otherwise fall back to ability id.
+        string displayName = string.IsNullOrWhiteSpace(parsed.Name) ? parsed.AbilityId : parsed.Name;
         return new AbilityState(
             Id: parsed.AbilityId,
-            Name: parsed.AbilityId, // name not carried in the fixed record; use ID
+            Name: displayName,
             Available: parsed.Available,
             Usable: parsed.Usable,
             InRange: parsed.InRange,
@@ -185,6 +219,17 @@ public static class V5HealthMapper
             CastTimeMilliseconds: parsed.CastTimeMs >= 0 ? parsed.CastTimeMs : null,
             IsChannel: parsed.IsChanneled,
             IsPassive: parsed.IsPassive);
+    }
+
+    /// <summary>
+    /// Map optional action-bar observation for calibration (does not invent keys).
+    /// </summary>
+    public static IReadOnlyList<(byte Slot, string AbilityId)> ToActionBarSlots(ParsedV5Frame frame)
+    {
+        if (frame.ActionBar is null) return [];
+        return frame.ActionBar.Slots
+            .Select(s => (s.Slot, s.AbilityId))
+            .ToList();
     }
 
     private static AuraState ToAuraState(ParsedAuraState parsed)

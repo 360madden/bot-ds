@@ -17,7 +17,7 @@ Core (BotDs.Core)
   |  TelemetryFrame, CombatProfile records, JSON loader/validator, CombatEvaluator
   v
 App (BotDs.App)
-  |  ASP.NET Core localhost dashboard (auth via Bearer tokens), SSE streaming,
+  |  ASP.NET Core localhost dashboard (loopback-only, no token), SSE streaming,
   |  ControllerStateMachine, EvaluatorLoop, ProfileService, NDJSON structured logs
 ```
 
@@ -51,20 +51,19 @@ luac -p addons/BotDsBridge/BotDsBridge/main.lua
 git diff --check
 ```
 
-## Dashboard token setup
+## Run
 
-Set `BotDs:Dashboard:ApiToken` and `BotDs:Dashboard:ControlToken` through environment variables or .NET user secrets. Empty tokens disable their respective read/control credentials. A valid control token also grants read access. The dashboard sends Bearer tokens via the `Authorization` header; control endpoints also accept `X-Control-Token`. All API endpoints are restricted to loopback addresses.
-
-```json
-{
-  "BotDs": {
-    "Dashboard": {
-      "ApiToken": "your-read-token",
-      "ControlToken": "your-control-token"
-    }
-  }
-}
+```text
+run-botds.cmd                 # development (dotnet run)
+run-botds.cmd --publish       # after: dotnet publish ... -o publish/
+deploy-addon.cmd              # BotDsBridge → shell MyDocuments AddOns
 ```
+
+See `docs/first-run.md` for the full first-run and live DryRun checklist.
+
+## Dashboard access
+
+No API token. The dashboard and `/api/*` endpoints are **loopback-only** (`localhost` / `127.0.0.1`). Open `http://localhost:5068` after starting the app — no login step.
 
 ## Profiles and schema
 
@@ -72,7 +71,7 @@ Combat profiles are versioned JSON files placed in `profiles/` (configurable via
 
 ## Addon install
 
-Copy the `addons/BotDsBridge/BotDsBridge` folder into `<RIFT install>\Interface\Addons\`. The addon is a provider-only skeleton: it emits the V5 envelope and heartbeat but stubs all game-state sections (Player, Target, Abilities, Auras).
+**Addon deploy (durable):** see `docs/rift-local-paths.md`. Use `deploy-addon.cmd` (C# resolves shell MyDocuments). On this machine: `C:\Users\mrkoo\OneDrive\Documents\RIFT\Interface\AddOns\BotDsBridge\`. Never use Glyph `Live\Interface\Addons` or a non-shell Documents path as primary.
 
 ## Scanner selector
 
@@ -80,11 +79,11 @@ The Reader locates the target process by PID, name, or both via `ProcessSelector
 
 ## Current limitations
 
-- **No hosted Reader loop**: the scanner is instantiable and testable but not wired as a hosted service. The application currently publishes an empty `TelemetryFrame`.
-- **Lua provider-only/stable-address issue**: the addon emits only the V5 envelope/heartbeat. Game-state sections are stubbed. The immutable Lua string is rebuilt repeatedly during each frame, so stable-address, in-place publication, and allocation-cost requirements need a transport redesign or validated client storage facility before live publication.
-- **No action output**: no keyboard actuator or foreground injection exists. The evaluator produces `ActionDecision` records but they are logged only.
+- **Live residual**: M2/M8 are code-complete; full soak, failure matrix, and operator key calibration remain environment-gated (see `ROADMAP.md` / `HANDOFF.md`).
+- **Lua immutable region**: each materialize creates a new process-memory string (GC copies); scanner uses cache + ranking + dual schema. No movement/pathfinding.
+- **Keys not observed**: action bar yields ability ids only; profile keys are user-confirmed (draft may suggest defaults from slot index).
 - **No movement, pathfinding, or navigation**: explicitly out of scope.
 
 ## Privacy
 
-Default launch profiles bind localhost, and API middleware rejects non-loopback callers. Explicit listener-level loopback enforcement is scheduled in roadmap M3. The application does not collect credentials, chat content, or unnecessary sensitive identifiers. Logs are structured NDJSON with 14-day retention. Dashboard tokens are never placed in URLs; SSE uses authenticated `fetch()` streaming.
+Default launch binds loopback; API middleware rejects non-loopback callers. The application does not collect credentials or chat content. Logs are local structured NDJSON. No dashboard tokens.

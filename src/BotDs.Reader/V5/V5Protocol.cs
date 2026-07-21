@@ -55,11 +55,22 @@ public static class V5Constants
     public const byte ProtocolVersion = 5;
 
     // ── Schema version ────────────────────────────────────────
-    public const byte SchemaVersionCurrent = 1;
+    /// <summary>Minimum accepted provider schema (v1 = 46-byte abilities, no name).</summary>
+    public const byte SchemaVersionMin = 1;
+    /// <summary>Schema 2: ability records include display name (80-byte fixed records).</summary>
+    public const byte SchemaVersionCurrent = 2;
+    /// <summary>Legacy ability record size before schema v2 names.</summary>
+    public const int AbilityRecordSizeV1 = 46;
 
     // ── Flags ─────────────────────────────────────────────────
     public const byte FlagIsHeartbeat = 0x01;
     public const byte FlagIsSecure = 0x02;
+    /// <summary>When set with <see cref="FlagGameInputReadyKnown"/>, game input is ready.</summary>
+    public const byte FlagGameInputReady = 0x04;
+    /// <summary>When set, <see cref="FlagGameInputReady"/> is meaningful (known).</summary>
+    public const byte FlagGameInputReadyKnown = 0x08;
+    /// <summary>Bits 4–7 must remain zero (reserved).</summary>
+    public const byte FlagsReservedMask = 0xF0;
 
     // ── Section types ─────────────────────────────────────────
     public const ushort SectionTypeProviderInfo = 0x0001;
@@ -68,6 +79,7 @@ public static class V5Constants
     public const ushort SectionTypeAbilities = 0x0004;
     public const ushort SectionTypePlayerAuras = 0x0005;
     public const ushort SectionTypeTargetAuras = 0x0006;
+    public const ushort SectionTypeActionBar = 0x0007;
 
     // ── Sections mask bits ────────────────────────────────────
     public const uint MaskProviderInfo = 0x00000001;
@@ -76,6 +88,10 @@ public static class V5Constants
     public const uint MaskAbilities = 0x00000008;
     public const uint MaskPlayerAuras = 0x00000010;
     public const uint MaskTargetAuras = 0x00000020;
+    public const uint MaskActionBar = 0x00000040;
+
+    public const int MaxActionBarSlots = 12;
+    public const int ActionBarSlotRecordSize = 33; // slot:1 + abilityId:32
 
     // ── Section TLV header ────────────────────────────────────
     public const int SectionHeaderSize = 4; // type:2 + length:2
@@ -92,9 +108,11 @@ public static class V5Constants
     public const int MaxClientVersionLength = 128;
 
     // ── Fixed record sizes ────────────────────────────────────
-    public const int AbilityRecordSize = 46;  // id:32 + cdRemain:4 + cdDur:4 + castTime:4 + flags:1 + cost:1
+    // Schema v2: id:32 + cdRemain:4 + cdDur:4 + castTime:4 + flags:1 + cost:1 + nameLen:2 + name:32 = 80
+    public const int AbilityRecordSize = 80;
     public const int AuraRecordSize = 70;     // id:32 + nameLen:2 + name:32 + stacks:1 + flags:1 + remaining:2
     public const int AbilityIdFieldSize = 32;
+    public const int AbilityNameFieldSize = 32;
     public const int AuraIdFieldSize = 32;
     public const int AuraNameFieldSize = 32;
 
@@ -143,6 +161,8 @@ public struct V5BufferHeader
 
     public bool IsHeartbeat => (Flags & V5Constants.FlagIsHeartbeat) != 0;
     public bool IsSecure => (Flags & V5Constants.FlagIsSecure) != 0;
+    public bool IsGameInputReadyKnown => (Flags & V5Constants.FlagGameInputReadyKnown) != 0;
+    public bool IsGameInputReady => IsGameInputReadyKnown && (Flags & V5Constants.FlagGameInputReady) != 0;
 
     public bool HasSection(uint mask) => (SectionsMask & mask) != 0;
 
@@ -178,9 +198,9 @@ public struct V5SectionHeader
 }
 
 /// <summary>
-/// Fixed-size ability record as it appears on the wire.
+/// Fixed-size ability record as it appears on the wire (schema v2, 80 bytes).
 /// </summary>
-[StructLayout(LayoutKind.Sequential, Pack = 1, Size = 46)]
+[StructLayout(LayoutKind.Sequential, Pack = 1, Size = 80)]
 public struct V5AbilityRecord
 {
     // 32 bytes ASCII, space-padded
@@ -190,6 +210,8 @@ public struct V5AbilityRecord
     public int CastTimeMs;
     public byte Flags;
     public byte ResourceCost;
+    public ushort NameLength;
+    public unsafe fixed byte Name[32];
 
     public string GetAbilityId()
     {
@@ -200,6 +222,20 @@ public struct V5AbilityRecord
                 int len = 0;
                 while (len < 32 && ptr[len] != 0 && ptr[len] != 0x20) len++;
                 return len == 0 ? string.Empty : System.Text.Encoding.ASCII.GetString(ptr, len);
+            }
+        }
+    }
+
+    public string GetName()
+    {
+        unsafe
+        {
+            fixed (byte* ptr = Name)
+            {
+                int len = Math.Min((int)NameLength, 32);
+                int actual = 0;
+                while (actual < len && ptr[actual] != 0) actual++;
+                return actual == 0 ? string.Empty : System.Text.Encoding.UTF8.GetString(ptr, actual);
             }
         }
     }
@@ -296,7 +332,8 @@ public sealed record ParsedAbilityState(
     int CooldownDurationMs,
     int CastTimeMs,
     byte Flags,
-    byte ResourceCost)
+    byte ResourceCost,
+    string Name = "")
 {
     public bool Available => (Flags & V5Constants.AbilityFlagAvailable) != 0;
     public bool Usable => (Flags & V5Constants.AbilityFlagUsable) != 0;
@@ -304,6 +341,12 @@ public sealed record ParsedAbilityState(
     public bool IsPassive => (Flags & V5Constants.AbilityFlagPassive) != 0;
     public bool IsChanneled => (Flags & V5Constants.AbilityFlagChanneled) != 0;
 }
+
+/// <summary>One action-bar slot observation (slot index + ability id when present).</summary>
+public sealed record ParsedActionBarSlot(byte Slot, string AbilityId);
+
+/// <summary>Action bar page + slot placements for calibration (keys still user-configured).</summary>
+public sealed record ParsedActionBar(byte Page, IReadOnlyList<ParsedActionBarSlot> Slots);
 
 /// <summary>
 /// Parsed aura state.
@@ -332,4 +375,5 @@ public sealed record ParsedV5Frame(
     IReadOnlyList<ParsedAbilityState> Abilities,
     IReadOnlyList<ParsedAuraState> PlayerAuras,
     IReadOnlyList<ParsedAuraState> TargetAuras,
-    int BufferIndex);
+    int BufferIndex,
+    ParsedActionBar? ActionBar = null);

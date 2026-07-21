@@ -1,5 +1,6 @@
 using BotDs.App.Services;
 using BotDs.Core;
+using BotDs.Input;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
@@ -145,21 +146,99 @@ public sealed class ActionCoordinatorTests : IDisposable
         Assert.False(coord.TrySetMode(OutputMode.DryRun, MaxAge));
     }
 
+    [Fact]
+    public async Task ObservePending_acknowledges_cooldown_and_verifies_binding()
+    {
+        var (coord, _, pub, _, sm) = await CreateReadyCoordinator();
+        Assert.True(coord.TrySetMode(OutputMode.DryRun, MaxAge));
+        sm.Arm();
+
+        TelemetryFrame pre = CreateHealthyFrame(sequence: 100, cooldownRemainingMs: 0);
+        pub.Publish(pre);
+
+        var r1 = coord.Consume(CreateHealthyResult(actionKey: "1", sequence: 100), sm.Generation);
+        Assert.Equal(DispatchOutcome.Dispatched, r1!.Outcome);
+        Assert.NotNull(coord.PendingAction);
+        Assert.Equal(BindingVerificationState.Unverified, coord.Bindings.GetState("slice"));
+
+        TelemetryFrame post = CreateHealthyFrame(
+            sequence: 101,
+            cooldownRemainingMs: 1200,
+            sessionId: pre.Provider.SessionId);
+        pub.Publish(post);
+
+        var ack = coord.ObservePending(post, sm.Generation);
+        Assert.NotNull(ack);
+        Assert.Equal(DispatchOutcome.Acknowledged, ack!.Outcome);
+        Assert.Null(coord.PendingAction);
+        Assert.Equal(BindingVerificationState.Verified, coord.Bindings.GetState("slice"));
+    }
+
+    [Fact]
+    public async Task Live_mode_requires_verified_bindings()
+    {
+        var (coord, _, _, _, _) = await CreateReadyCoordinator();
+
+        // Fresh profile binding is Unverified — Live must fail closed.
+        Assert.False(coord.TrySetMode(OutputMode.Live, MaxAge));
+        Assert.Equal(OutputMode.Disabled, coord.Mode);
+
+        coord.Bindings.MarkVerified("slice");
+        Assert.True(coord.TrySetMode(OutputMode.Live, MaxAge));
+        Assert.Equal(OutputMode.Live, coord.Mode);
+    }
+
+    [Fact]
+    public async Task Live_ack_timeout_stops_controller()
+    {
+        var time = new FakeTimeProvider();
+        var (coord, _, pub, _, sm) = await CreateReadyCoordinator(time, frameNow: time.GetUtcNow());
+        coord.Bindings.MarkVerified("slice");
+        Assert.True(coord.TrySetMode(OutputMode.Live, MaxAge));
+        sm.Arm();
+
+        TelemetryFrame pre = CreateHealthyFrame(sequence: 50, cooldownRemainingMs: 0, now: time.GetUtcNow());
+        pub.Publish(pre);
+        var r1 = coord.Consume(CreateHealthyResult(actionKey: "1", sequence: 50), sm.Generation);
+        Assert.Equal(DispatchOutcome.Dispatched, r1!.Outcome);
+
+        time.Advance(TimeSpan.FromMilliseconds(2500));
+        TelemetryFrame stillPending = CreateHealthyFrame(
+            sequence: 51,
+            cooldownRemainingMs: 0,
+            sessionId: pre.Provider.SessionId,
+            now: time.GetUtcNow());
+        pub.Publish(stillPending);
+
+        var timeout = coord.ObservePending(stillPending, sm.Generation);
+        Assert.NotNull(timeout);
+        Assert.Equal(DispatchOutcome.AcknowledgementTimeout, timeout!.Outcome);
+        Assert.Equal(ControllerState.Stopped, sm.State);
+        Assert.Equal(StopReason.ActionNotAcknowledged, sm.Snapshot.StopReason);
+        Assert.Equal(OutputMode.Disabled, coord.Mode);
+    }
+
     // ---- Helpers ----
 
     private async Task<(ActionCoordinator, ProfileService, SnapshotPublisher, ArmingReadinessService, ControllerStateMachine)>
-        CreateReadyCoordinator()
+        CreateReadyCoordinator(TimeProvider? timeProvider = null, DateTimeOffset? frameNow = null)
     {
-        var pub = new SnapshotPublisher();
+        TimeProvider clock = timeProvider ?? TimeProvider.System;
+        var pub = new SnapshotPublisher(clock);
         var profiles = await CreateProfileService("test-profile");
         WriteProfileFile(CreateValidProfileJson());
         await profiles.ReloadAsync();
         profiles.SetActiveProfile("test-profile");
-        pub.Publish(CreateHealthyFrame());
-        var readiness = new ArmingReadinessService(pub, profiles);
+        pub.Publish(CreateHealthyFrame(now: frameNow ?? clock.GetUtcNow()));
+        var readiness = new ArmingReadinessService(pub, profiles, clock);
         var sm = new ControllerStateMachine(new NullLogger<ControllerStateMachine>());
         var config = CreateConfig();
-        var coord = new ActionCoordinator(pub, sm, profiles, readiness, config);
+        var bindings = new BindingVerificationTracker();
+        var coord = new ActionCoordinator(
+            pub, sm, profiles, readiness, config,
+            keySink: new FakeKeySink(),
+            timeProvider: clock,
+            bindingVerification: bindings);
         return (coord, profiles, pub, readiness, sm);
     }
 
@@ -238,26 +317,31 @@ public sealed class ActionCoordinatorTests : IDisposable
             .Build();
     }
 
-    private static EvaluationResult CreateHealthyResult(string actionKey = "1")
+    private static EvaluationResult CreateHealthyResult(string actionKey = "1", ulong sequence = 100)
     {
         return new EvaluationResult(
             ControllerState.Armed,
-            new ActionDecision("r1", "slice", "1001", actionKey, AcknowledgementKind.Cooldown, 100),
+            new ActionDecision("r1", "slice", "1001", actionKey, AcknowledgementKind.Cooldown, sequence),
             []);
     }
 
-    private static TelemetryFrame CreateHealthyFrame()
+    private static TelemetryFrame CreateHealthyFrame(
+        ulong sequence = 100,
+        int? cooldownRemainingMs = 0,
+        string? sessionId = null,
+        DateTimeOffset? now = null)
     {
-        var now = DateTimeOffset.UtcNow;
+        DateTimeOffset receivedAt = now ?? DateTimeOffset.UtcNow;
         return new TelemetryFrame(
             Provider: new ProviderStatus(
                 Health: ProviderHealth.Healthy,
                 ProtocolVersion: "5",
-                SessionId: Guid.NewGuid().ToString("D"),
-                Sequence: 100,
+                SessionId: sessionId ?? Guid.NewGuid().ToString("D"),
+                Sequence: sequence,
                 ProducerFrameMilliseconds: 16,
-                ReceivedAtUtc: now,
-                Age: TimeSpan.FromMilliseconds(10)),
+                ReceivedAtUtc: receivedAt,
+                Age: TimeSpan.FromMilliseconds(10),
+                SourceGeneration: 1),
             Player: new UnitState(
                 Id: "player-1", Name: "Test", Level: 50, Calling: "Warrior",
                 IsPlayer: true, Relation: "friendly",
@@ -273,7 +357,7 @@ public sealed class ActionCoordinatorTests : IDisposable
                 new Dictionary<string, AbilityState>
                 {
                     ["1001"] = new AbilityState(
-                        "1001", "Slice", true, true, true, 0, 1500, null,
+                        "1001", "Slice", true, true, true, cooldownRemainingMs, 1500, null,
                         new ReadOnlyDictionary<string, int>(new Dictionary<string, int>()),
                         0, false, false),
                 }),

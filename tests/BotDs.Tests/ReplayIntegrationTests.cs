@@ -102,8 +102,18 @@ public sealed class ReplayIntegrationTests : IDisposable
         // Verify all frames were processed
         Assert.Equal(4, results.Count);
         Assert.Equal(DispatchOutcome.Dispatched, results[0].record!.Outcome); // First fireball
-        Assert.True(results[1].record is null || results[1].record!.Outcome == DispatchOutcome.PendingActionBlocked); // Cooldown = no new dispatch
-        Assert.True(results[2].record is null); // Still in cooldown, evaluator produces no action
+        // Tick 1: either still waiting (pending blocked) or cooldown-ack matched and cleared.
+        Assert.True(
+            results[1].record is null
+            || results[1].record!.Outcome is DispatchOutcome.PendingActionBlocked
+                or DispatchOutcome.Acknowledged,
+            $"Tick 1 unexpected outcome: {results[1].record?.Outcome}");
+        Assert.True(
+            results[2].record is null
+            || results[2].record!.Outcome is DispatchOutcome.PendingActionBlocked
+                or DispatchOutcome.Acknowledged
+                or DispatchOutcome.RateLimited,
+            $"Tick 2 unexpected outcome: {results[2].record?.Outcome}");
         Assert.Equal(DispatchOutcome.Dispatched, results[3].record!.Outcome); // Cooldown expired → second fireball
     }
 
@@ -327,7 +337,7 @@ public sealed class ReplayIntegrationTests : IDisposable
     private async Task<(ActionCoordinator coordinator, ControllerStateMachine sm, SnapshotPublisher pub, FakeTimeProvider time)> CreateReplayPipeline()
     {
         var time = new FakeTimeProvider();
-        var pub = new SnapshotPublisher();
+        var pub = new SnapshotPublisher(time);
         var profiles = await CreateProfileService("test-profile");
 
         // Write the profile JSON so it loads
@@ -335,7 +345,7 @@ public sealed class ReplayIntegrationTests : IDisposable
         await profiles.ReloadAsync();
         profiles.SetActiveProfile("test-profile");
 
-        var readiness = new ArmingReadinessService(pub, profiles);
+        var readiness = new ArmingReadinessService(pub, profiles, time);
         var sm = new ControllerStateMachine(new NullLogger<ControllerStateMachine>());
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>

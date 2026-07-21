@@ -346,7 +346,16 @@ public sealed class StableReader
                 $"Sequence has not advanced for {age.TotalMilliseconds:F0}ms; maximum is {maximumAge.TotalMilliseconds:F0}ms");
         }
 
-        // 7. Map to health
+        // 7. Map to health.
+        // Small forward gaps are expected with the Lua immutable-string emitter:
+        // each materialize relocates the region and the reader may miss intermediate
+        // sequence numbers. Treat modest gaps as Healthy so observation stays usable;
+        // large gaps remain Degraded (possible desync / multi-producer).
+        if (continuity is ContinuityResult.Gap && gapSize > 0 && gapSize <= MaxBenignSequenceGap)
+        {
+            return StableReadResult.Healthy(frame, age, continuity);
+        }
+
         if (continuity is ContinuityResult.Gap or ContinuityResult.SequenceWrap)
         {
             return StableReadResult.Degraded(frame, continuity, gapSize, age);
@@ -354,6 +363,12 @@ public sealed class StableReader
 
         return StableReadResult.Healthy(frame, age, continuity);
     }
+
+    /// <summary>
+    /// Maximum missed sequence increments still treated as Healthy. Sized for the
+    /// ~10 Hz BotDsBridge publisher (about 1.5 s of missed publishes after a GC relocate).
+    /// </summary>
+    public const uint MaxBenignSequenceGap = 15;
 
     /// <summary>
     /// Reset internal state (session tracker, cached sequences).

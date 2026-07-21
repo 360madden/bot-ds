@@ -20,13 +20,13 @@ The architectural contract is defined in `PLAN.md`. This roadmap orders implemen
 ```text
 M0 Foundation [Complete]
   -> M1 Transport and current-client conformance [Decided]
-      -> M2 Live telemetry provider [Planned — requires live game + bridge addon]
+      -> M2 Live telemetry provider [Code-complete — live soak deferred]
           -> M3 Hosted source, snapshot assembly, and replay [Complete]
               -> M4 Dashboard settings and observability [Complete]
               -> M5 Profiles and progression readiness [Complete]
               -> M6 Dry-run action coordinator [Complete]
                   -> M7 Foreground Windows input [Complete]
-                      -> M8 Closed-loop live combat [Planned — requires live game]
+                      -> M8 Closed-loop live combat [Code-complete — live residual deferred]
                           -> M9 Final acceptance and packaging [Planned]
 ```
 
@@ -98,34 +98,33 @@ Goal: Select one reliable, low-latency addon-to-C# transport using measured curr
 
 ## M2: Live Telemetry Provider
 
-Status: Planned
+Status: **Code-complete** (2026-07-21) — live end-to-end **proven** (Healthy + player/target/abilities); long soak / formal §15.1 residual still deferred
 
 Goal: Replace the provider-only skeleton with complete live player and selected-target telemetry.
 
-### Work
+### Code complete (shipped + tested)
 
-- Introduce a small transport-neutral `ITelemetrySource` contract.
-- Implement the selected publication/capture path only.
-- Populate player identity, capability/calling, level, health, a resource map, combat state, liveness, and cast.
-- Populate selected target identity, relation, NPC/player classification, health, combat state, and cast.
-- Populate complete ability inventory with cooldown, usability, range, costs, cast time, passive, and channel state where available.
-- Populate complete player and target aura inventories.
-- Include client version, secure mode, session, sequence, and completeness.
-- Include per-section evidence sequence/time and explicit player/target/list knownness.
-- Publish privacy-safe `GameInputReady` knownness for chat/edit focus, modal UI, key-binding screens, loading, and other M1-proven blocked contexts.
-- Implement the production protocol version frozen by M1; do not alter V5 silently.
-- Keep all character and rotation data out of the addon and Reader.
+- Transport-neutral `ITelemetrySource` (`SnapshotTelemetrySource` over `SnapshotPublisher`); App DI registers it; no combat/profile/Warrior data in Reader or addon.
+- V5 publication path: BotDsBridge emits ProviderInfo, Player, Target (including **KnownNoTarget** via present section + unavailable unit), Abilities, Player/Target auras; header flags for **GameInputReady** / **GameInputReadyKnown** (bits 2–3).
+- Mapper: section-mask list knownness (known-empty vs unknown); `TargetKnownness` (`Unknown` / `KnownNoTarget` / `KnownTarget`); `GameInputReady` tri-state; fail-closed unavailable units.
+- Hosted `TelemetryReaderLoop` + `SnapshotAssembler` publish normalized `TelemetryFrame` for dashboard/evaluator.
+- Dashboard `/api/status` exposes `knownness` (target, abilities/auras, gameInputReady).
+- Unit coverage: `M2LiveTelemetryTests` encode→parse→map for healthy multi-section, known-empty lists, no-target vs unknown, GameInputReady true/false/unknown, calling-agnostic source structure, DI source path. Suite green (**551** as of 2026-07-21f).
+- Live (2026-07-21f): `rift_x64` attached, provider **Healthy**, player Atank L45 warrior, target present, **55 abilities**, knownness complete. Bridge 0.1.2 fixes Version table + sequence/materialize alignment.
+- Bridge **0.2.0** / schema **v2** (2026-07-21h): ability **name** + seconds→ms CD/usable fidelity; action-bar observation; `/api/abilities` + `/api/action-bar`.
 
-### Exit criteria
+### Explicitly deferred live-only exit items
 
-- A standalone read-only probe reports correct live state.
-- Target selection and loss appear within the freshness budget.
-- Known no-target, target unknown, and a known target are distinct.
-- Zero-count lists are known-empty; partial lists are unknown.
-- Overflow and record caps publish no misleading state.
-- Provider code contains no Warrior-specific IDs, levels, keys, or rules.
-- A 30-minute provider soak has no unhandled Lua or Reader errors.
-- The conformance workload in `PLAN.md` section 15.1 passes, including target, health/resource, cooldown/range, cast, aura, zoning, and reload transitions.
+1. ~~Standalone read-only live probe reporting correct in-world state end-to-end.~~ **Observed Healthy 2026-07-21f**
+2. Live target select/loss within freshness budget (manual exercise still needed).
+3. 30-minute provider soak with no unhandled Lua/Reader errors.
+4. Full `PLAN.md` §15.1 live transitions (zoning, reload, secure mode, etc.).
+
+**Do not mark M2 fully Complete until deferred live items pass.** Do not invent Warrior ability data.
+
+### Work (historical checklist)
+
+- ~~ITelemetrySource~~ · ~~V5 capture path~~ · ~~Player/target/abilities/auras sections~~ · ~~session/sequence/secure~~ · ~~list knownness~~ · ~~GameInputReady~~ · ~~calling-agnostic provider~~
 
 ## M3: Hosted Source, Snapshot Assembly, And Replay
 
@@ -261,35 +260,51 @@ Goal: Add the narrow native boundary that sends configured combat keys.
 
 ## M8: Closed-Loop Live Combat
 
-Status: Active
+Status: **Code-complete** (2026-07-21) — live exit criteria deferred
 
 Goal: Enable live output incrementally and prove observed acknowledgement.
 
-### Work
+### Code complete (shipped + tested)
 
-1. Add a control-authorized `Live` output-mode transition with complete readiness checks. Startup always coerces output to `Disabled`, even if `Live` was previously selected.
-2. Require disarmed state to change output mode and expose the transition through the dashboard control slice.
-3. Run the real Warrior profile in dry-run while manually comparing decisions to expected actions.
-4. Calibrate one key at a time and record `Unverified`, `Verified`, or `Mismatch` against the observed ability transition for the active binding generation.
-5. Require binding verification or controlled re-verification on every live arm. Do not change action-bar/key mappings while armed.
-6. Enable one verified ability and require its typed post-dispatch acknowledgement.
-7. Verify no duplicate sends through cooldown/GCD transitions.
-8. Add abilities one at a time while preserving one-action-in-flight semantics.
-9. Add profile-declared aura/resource/combat-event acknowledgement only when proven and required.
-10. Treat unexpected manual ability input while armed as an external-action conflict and stop.
-11. Exercise target death, target replacement, no target, friendly target, player death, chat/modal focus, alt-tab, addon reload, source stall, profile mismatch, and emergency stop.
-12. Tune only profile data and measured generic timing settings; do not introduce Warrior engine branches.
+- Control-authorized Live/DryRun/Disabled mode transitions; startup always coerces output to Disabled.
+- Typed acknowledgement matcher (Cast/Cooldown/Resource/Aura) with baseline capture; only newer-sequence same-session evidence acknowledges; unrelated ability CD does not ack the pending ability.
+- Pending observation every evaluator tick; Live ack-timeout latches `ActionNotAcknowledged` and disables output; one pending action blocks further combat keys.
+- Binding verification (`Unverified`/`Verified`/`Mismatch`); Live requires verified required bindings.
+- Global emergency hotkey (`Ctrl+Shift+F12` default) via `RegisterHotKey`; Live requires registration; press latches Stopped + Disabled.
+- Profile keys that collide with the emergency hotkey are rejected for DryRun/Live mode changes.
+- Target/session/source-generation change invalidates pending work; unexplained profile-ability cooldown while armed stops with `ExternalActionConflict`.
+- Dashboard binding endpoints and coordinator snapshot (including hotkey registration).
+- Closed-loop unit/integration coverage in `M8ClosedLoopGateTests` and related coordinator/ack/external-conflict tests (537 suite green as of 2026-07-21).
 
-### Exit criteria
+### Explicitly deferred live-only exit items
 
-- Each intended key produces one matching observed acknowledgement.
-- No unrelated cast, cooldown, aura, or resource change acknowledges an action.
-- No duplicate unacknowledged key is sent.
-- Target change or death cancels the pending action.
-- Missing acknowledgement stops within the configured timeout.
-- Live mode cannot activate without control authorization, current readiness, registered emergency hotkey, and verified bindings; restart returns to disabled.
-- A 30-minute soak includes at least 200 acknowledged dispatches and every forced-live-failure scenario in `PLAN.md` section 15.1.
-- The soak records no stale-state, failed-precondition, duplicate, or runaway dispatch and no unhandled detected focus or target-change race. The documented non-atomic target/focus residuals remain explicit acceptance limitations.
+These require a loaded BotDsBridge publishing Healthy V5 frames, real Warrior ability IDs/keys/rules (user-supplied or observed — **not invented**), and interactive game scenarios. They are **not** claimed Complete:
+
+1. In-game `/reloadui` → Healthy provider frames (scanner may attach with 0 candidates until addon emits).
+2. Real Warrior dry-run decision comparison against expected actions.
+3. Live key calibration soak and binding verification against observed ability transitions.
+4. Full forced-failure matrix (death, focus loss, alt-tab, target switch, reload, etc.) in the live client.
+5. 30-minute combat soak with ≥200 acknowledged dispatches and `PLAN.md` §15.1 live scenarios.
+6. Combat-event acknowledgement section (no combat-event telemetry section yet).
+7. Profile data tuning only after measured live timings — no Warrior engine branches.
+
+### Work item map
+
+1. ~~Live mode + readiness + startup Disabled~~
+2. ~~Disarmed mode transitions + dashboard control~~
+3. Real Warrior dry-run comparison — **deferred live**
+4. Live calibration — **deferred live** (auto-Verified on successful ack exists in code)
+5. ~~Binding verification required for Live~~
+6. Typed ack path — **code complete**; live proof deferred
+7–8. Multi-ability live enablement — **deferred live**
+9. Combat-event ack — **deferred** (protocol gap)
+10. ~~External-action conflict stop~~
+11. Live failure matrix + estop soak — **deferred live** (hotkey code complete)
+12. Profile-only tuning — **deferred live**
+
+### Exit criteria (live residual)
+
+Code-level fail-closed criteria are covered by tests. Remaining roadmap exit criteria that need Healthy live telemetry and real profile data stay open until deferred items 1–5 above are executed. **Do not mark M8 fully Complete until those live proofs exist.**
 
 ## M9: Final Acceptance And Packaging
 

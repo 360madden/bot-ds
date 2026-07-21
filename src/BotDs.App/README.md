@@ -15,25 +15,14 @@ Default development URL: `http://localhost:5068` (HTTPS profile on `https://loca
 All configuration lives in `appsettings.json` (override with environment variables or user-secrets):
 
 ```
-BotDs:Dashboard:ApiToken       - Bearer token for read-only API access
-BotDs:Dashboard:ControlToken   - Bearer token for control operations (arm, disarm, estop, profile reload, profile set)
-BotDs:Evaluator:MaximumTelemetryAgeMs - Maximum age of the latest telemetry frame before it is considered stale (default 5000)
+BotDs:Evaluator:MaximumTelemetryAgeMs - Maximum age of the latest telemetry frame before it is considered stale (default 500)
 BotDs:Evaluator:EvaluationIntervalMs  - Polling interval for the evaluator loop (default 100)
 BotDs:Profiles:Directory       - Relative or absolute path to JSON combat profiles (default ../../profiles)
 ```
 
-### Token configuration and fail-closed warnings
+### Loopback restriction (no token auth)
 
-On startup the host checks both tokens:
-
-- If `BotDs:Dashboard:ApiToken` is empty or missing, a warning is logged and that read credential is disabled. A configured control token can still authorize read endpoints.
-- If `BotDs:Dashboard:ControlToken` is empty or missing, a warning is logged and **control operations are disabled** (401 for `/api/control/*` and `POST /api/profiles/reload`).
-
-Both tokens must be non-empty strings for their respective access levels to function. The middleware always rejects requests when the configured token is empty; there is no unauthenticated fallback.
-
-### Loopback restriction
-
-`DashboardSecurityMiddleware` enforces the following before token checks:
+Personal local tool: there is **no** API token system. `DashboardSecurityMiddleware` only enforces:
 
 1. Remote IP must be a loopback address (`127.0.0.1`, `::1`, or `::ffff:127.0.0.1`).
 2. `Host` header must be `localhost`, `127.0.0.1`, or `::1`.

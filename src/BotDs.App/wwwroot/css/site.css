@@ -303,6 +303,60 @@ body {
   border-color: #3d444d;
 }
 
+.card__hint {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  max-height: 18rem;
+  overflow-y: auto;
+  border: 1px solid rgba(110, 118, 129, 0.25);
+  border-radius: 6px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(110, 118, 129, 0.2);
+  white-space: nowrap;
+}
+
+.data-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.data-table__empty {
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.data-table .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+}
+
 .card__title {
   font-size: .9rem;
   font-weight: 600;

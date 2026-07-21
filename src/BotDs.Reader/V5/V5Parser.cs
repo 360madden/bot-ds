@@ -108,11 +108,11 @@ public static class V5Parser
             return V5ParseResult.Fail(V5ParseFailure.ReservedFieldNonZero,
                 $"Reserved field is {header.Reserved} (expected 0)");
 
-        if ((header.Flags & 0xFC) != 0) // bits 2-7 must be zero
+        if ((header.Flags & V5Constants.FlagsReservedMask) != 0) // bits 4-7 must be zero
             return V5ParseResult.Fail(V5ParseFailure.FlagsReservedBitsSet,
                 $"Reserved flags bits set: 0x{header.Flags:X2}");
 
-        if (header.SectionsMask > 0x3F) // bits 6-31 must be zero
+        if (header.SectionsMask > 0x7F) // bits 7-31 must be zero (0x40 = ActionBar)
             return V5ParseResult.Fail(V5ParseFailure.SectionsMaskReservedBitsSet,
                 $"Reserved section mask bits set: 0x{header.SectionsMask:X8}");
 
@@ -135,6 +135,7 @@ public static class V5Parser
         List<ParsedAbilityState> abilities = [];
         List<ParsedAuraState> playerAuras = [];
         List<ParsedAuraState> targetAuras = [];
+        ParsedActionBar? actionBar = null;
 
         uint actualMask = 0;
         uint lastKnownMask = 0; // enforce ascending mask order per PROTOCOL.md §3.2
@@ -174,9 +175,11 @@ public static class V5Parser
                 V5Constants.SectionTypeProviderInfo => ParseProviderInfo(sectionData, out provider),
                 V5Constants.SectionTypePlayer => ParseUnitState(sectionData, out player),
                 V5Constants.SectionTypeTarget => ParseUnitState(sectionData, out target),
-                V5Constants.SectionTypeAbilities => ParseAbilities(sectionData, abilities),
+                V5Constants.SectionTypeAbilities => ParseAbilities(
+                    sectionData, abilities, provider?.SchemaVersion ?? V5Constants.SchemaVersionCurrent),
                 V5Constants.SectionTypePlayerAuras => ParseAuras(sectionData, playerAuras),
                 V5Constants.SectionTypeTargetAuras => ParseAuras(sectionData, targetAuras),
+                V5Constants.SectionTypeActionBar => ParseActionBar(sectionData, out actionBar),
                 _ => V5ParseResult.Fail(V5ParseFailure.SectionTypeUnknown,
                     $"Unknown section type 0x{sectionHeader.SectionType:X4}")
             };
@@ -200,7 +203,8 @@ public static class V5Parser
         var frame = new ParsedV5Frame(
             header, provider, player, target,
             abilities.AsReadOnly(), playerAuras.AsReadOnly(), targetAuras.AsReadOnly(),
-            bufferIndex);
+            bufferIndex,
+            actionBar);
 
         return V5ParseResult.Ok(frame);
     }
@@ -255,9 +259,12 @@ public static class V5Parser
         byte schemaVersion = data[26 + versionLen];
         byte reserved = data[27 + versionLen];
 
-        if (schemaVersion != V5Constants.SchemaVersionCurrent)
+        // Accept schema Min..Current so a live client can keep emitting until /reloadui
+        // upgrades the bridge (v1=46-byte abilities; v2=80-byte + name + action bar).
+        if (schemaVersion < V5Constants.SchemaVersionMin
+            || schemaVersion > V5Constants.SchemaVersionCurrent)
             return V5ParseResult.Fail(V5ParseFailure.ProviderSchemaVersionMismatch,
-                $"ProviderInfo SchemaVersion {schemaVersion} != expected {V5Constants.SchemaVersionCurrent}");
+                $"ProviderInfo SchemaVersion {schemaVersion} outside supported range {V5Constants.SchemaVersionMin}–{V5Constants.SchemaVersionCurrent}");
 
         if (reserved != 0)
             return V5ParseResult.Fail(V5ParseFailure.ReservedFieldNonZero,
@@ -352,7 +359,10 @@ public static class V5Parser
             V5ParseResult.Fail(V5ParseFailure.UnitTruncated, $"Unit field '{field}' truncated");
     }
 
-    private static V5ParseResult ParseAbilities(ReadOnlySpan<byte> data, List<ParsedAbilityState> abilities)
+    private static V5ParseResult ParseAbilities(
+        ReadOnlySpan<byte> data,
+        List<ParsedAbilityState> abilities,
+        byte schemaVersion)
     {
         if (data.Length < 2)
             return V5ParseResult.Fail(V5ParseFailure.AbilitiesTruncated, "Ability count truncated");
@@ -362,10 +372,13 @@ public static class V5Parser
             return V5ParseResult.Fail(V5ParseFailure.AbilityCountExceedsMax,
                 $"Ability count {count} > max {V5Constants.MaxAbilities}");
 
-        int expectedSize = 2 + count * V5Constants.AbilityRecordSize;
+        int recordSize = schemaVersion >= 2
+            ? V5Constants.AbilityRecordSize
+            : V5Constants.AbilityRecordSizeV1;
+        int expectedSize = 2 + count * recordSize;
         if (data.Length != expectedSize)
             return V5ParseResult.Fail(V5ParseFailure.SectionPayloadLengthMismatch,
-                $"Abilities expected {expectedSize} bytes for {count} records, got {data.Length}");
+                $"Abilities expected {expectedSize} bytes for {count} records (schema {schemaVersion}), got {data.Length}");
 
         abilities.Clear();
         abilities.Capacity = Math.Max(abilities.Capacity, count);
@@ -373,20 +386,80 @@ public static class V5Parser
         int offset = 2;
         for (int i = 0; i < count; i++)
         {
-            ReadOnlySpan<byte> record = data.Slice(offset, V5Constants.AbilityRecordSize);
-            V5AbilityRecord rec = MemoryMarshal.Read<V5AbilityRecord>(record);
+            ReadOnlySpan<byte> record = data.Slice(offset, recordSize);
+            if (schemaVersion >= 2)
+            {
+                V5AbilityRecord rec = MemoryMarshal.Read<V5AbilityRecord>(record);
+                if (rec.NameLength > V5Constants.AbilityNameFieldSize)
+                    return V5ParseResult.Fail(V5ParseFailure.SectionPayloadLengthMismatch,
+                        $"Ability name length {rec.NameLength} > max {V5Constants.AbilityNameFieldSize}");
 
-            abilities.Add(new ParsedAbilityState(
-                rec.GetAbilityId(),
-                rec.CooldownRemainingMs,
-                rec.CooldownDurationMs,
-                rec.CastTimeMs,
-                rec.Flags,
-                rec.ResourceCost));
+                abilities.Add(new ParsedAbilityState(
+                    rec.GetAbilityId(),
+                    rec.CooldownRemainingMs,
+                    rec.CooldownDurationMs,
+                    rec.CastTimeMs,
+                    rec.Flags,
+                    rec.ResourceCost,
+                    rec.GetName()));
+            }
+            else
+            {
+                // Schema v1: id:32 + cdRemain:4 + cdDur:4 + cast:4 + flags:1 + cost:1
+                string id = ReadFixedAscii(record[..32]);
+                int cdRemain = BitConverter.ToInt32(record[32..]);
+                int cdDur = BitConverter.ToInt32(record[36..]);
+                int castMs = BitConverter.ToInt32(record[40..]);
+                byte flags = record[44];
+                byte cost = record[45];
+                abilities.Add(new ParsedAbilityState(id, cdRemain, cdDur, castMs, flags, cost, Name: ""));
+            }
 
-            offset += V5Constants.AbilityRecordSize;
+            offset += recordSize;
         }
 
+        return V5ParseResult.Ok(null!);
+    }
+
+    private static string ReadFixedAscii(ReadOnlySpan<byte> field)
+    {
+        int len = 0;
+        while (len < field.Length && field[len] != 0 && field[len] != 0x20) len++;
+        return len == 0 ? string.Empty : System.Text.Encoding.ASCII.GetString(field[..len]);
+    }
+
+    private static V5ParseResult ParseActionBar(ReadOnlySpan<byte> data, out ParsedActionBar? actionBar)
+    {
+        actionBar = null;
+        // page:u8 + count:u8 + count * (slot:u8 + id:32)
+        if (data.Length < 2)
+            return V5ParseResult.Fail(V5ParseFailure.SectionPayloadLengthMismatch, "ActionBar truncated");
+
+        byte page = data[0];
+        byte count = data[1];
+        if (count > V5Constants.MaxActionBarSlots)
+            return V5ParseResult.Fail(V5ParseFailure.SectionPayloadLengthMismatch,
+                $"ActionBar slot count {count} > max {V5Constants.MaxActionBarSlots}");
+
+        int expected = 2 + count * V5Constants.ActionBarSlotRecordSize;
+        if (data.Length != expected)
+            return V5ParseResult.Fail(V5ParseFailure.SectionPayloadLengthMismatch,
+                $"ActionBar expected {expected} bytes, got {data.Length}");
+
+        var slots = new List<ParsedActionBarSlot>(count);
+        int offset = 2;
+        for (int i = 0; i < count; i++)
+        {
+            byte slot = data[offset];
+            ReadOnlySpan<byte> idBytes = data.Slice(offset + 1, 32);
+            int len = 0;
+            while (len < 32 && idBytes[len] != 0 && idBytes[len] != 0x20) len++;
+            string id = len == 0 ? string.Empty : System.Text.Encoding.ASCII.GetString(idBytes[..len]);
+            slots.Add(new ParsedActionBarSlot(slot, id));
+            offset += V5Constants.ActionBarSlotRecordSize;
+        }
+
+        actionBar = new ParsedActionBar(page, slots);
         return V5ParseResult.Ok(null!);
     }
 
@@ -444,6 +517,7 @@ public static class V5Parser
         V5Constants.SectionTypeAbilities => V5Constants.MaskAbilities,
         V5Constants.SectionTypePlayerAuras => V5Constants.MaskPlayerAuras,
         V5Constants.SectionTypeTargetAuras => V5Constants.MaskTargetAuras,
+        V5Constants.SectionTypeActionBar => V5Constants.MaskActionBar,
         _ => 0,
     };
 

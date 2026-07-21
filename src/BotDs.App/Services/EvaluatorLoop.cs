@@ -74,10 +74,13 @@ public sealed class EvaluatorLoop : BackgroundService
                 {
                     lock (_resultLock) _lastResult = result;
 
-                    // Delegate dispatch to ActionCoordinator (M6+)
-                    if (result.HasAction && _actionCoordinator is not null)
+                    if (_actionCoordinator is not null)
                     {
-                        DispatchRecord? dispatch = _actionCoordinator.Consume(result, generation);
+                        // Always observe pending ack/timeout; Consume also handles new actions.
+                        DispatchRecord? dispatch = result.HasAction
+                            ? _actionCoordinator.Consume(result, generation)
+                            : _actionCoordinator.ObservePending(frame, generation);
+
                         if (dispatch is not null)
                         {
                             _log.LogInformation(
@@ -85,9 +88,8 @@ public sealed class EvaluatorLoop : BackgroundService
                                 dispatch.Outcome, dispatch.RuleId, dispatch.AbilityId, dispatch.Key, dispatch.Detail ?? "—");
                         }
                     }
-                    else if (result.HasAction && _actionCoordinator is null)
+                    else if (result.HasAction)
                     {
-                        // Legacy path before ActionCoordinator is wired
                         _log.LogInformation(
                             "Action pending (no coordinator): Rule={RuleId}, Ability={AbilityId}, Key={Key}, Ack={Ack}, Seq={Seq}",
                             result.Action!.RuleId,

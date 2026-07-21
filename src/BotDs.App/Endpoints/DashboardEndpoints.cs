@@ -19,10 +19,13 @@ public static class DashboardEndpoints
         RouteGroupBuilder api = builder.MapGroup("/api");
 
         api.MapGet("/status", GetStatus);
+        api.MapGet("/abilities", GetAbilities);
+        api.MapGet("/action-bar", GetActionBar);
         api.MapGet("/profiles", GetProfiles);
         api.MapGet("/profiles/{id}", GetProfileById);
         api.MapPut("/profiles/{id}", SaveProfile);
         api.MapPost("/profiles/reload", ReloadProfiles);
+        api.MapPost("/profiles/draft-from-telemetry", DraftProfileFromTelemetry);
         api.MapPost("/control/profile", SetProfile);
         api.MapPost("/control/arm", Arm);
         api.MapPost("/control/disarm", Disarm);
@@ -31,6 +34,8 @@ public static class DashboardEndpoints
         api.MapGet("/readiness", GetReadiness);
         api.MapPost("/control/output-mode", SetOutputMode);
         api.MapGet("/coordinator", GetCoordinator);
+        api.MapGet("/bindings", GetBindings);
+        api.MapPost("/control/bindings", SetBindingState);
         api.MapGet("/events", StreamEvents);
 
         return builder;
@@ -63,12 +68,176 @@ public static class DashboardEndpoints
             r.Detail,
         }).ToList();
 
+        BindingVerificationSnapshot bindings = coordinator.Bindings.Snapshot();
         return Results.Json(new
         {
             OutputMode = coordinator.Mode.ToString(),
             PendingAction = coordinator.PendingAction,
             RecentHistory = history,
+            EmergencyHotkey = new
+            {
+                Binding = coordinator.EmergencyHotkey.Binding,
+                Registered = coordinator.EmergencyHotkey.IsRegistered,
+                Error = coordinator.EmergencyHotkey.LastError,
+            },
+            Bindings = new
+            {
+                bindings.Generation,
+                bindings.ProfileId,
+                bindings.ProviderSessionId,
+                States = bindings.States.ToDictionary(
+                    kv => kv.Key,
+                    kv => kv.Value.ToString(),
+                    StringComparer.OrdinalIgnoreCase),
+            },
         }, JsonOptions);
+    }
+
+    private static IResult GetBindings([FromServices] ActionCoordinator coordinator)
+    {
+        BindingVerificationSnapshot bindings = coordinator.Bindings.Snapshot();
+        return Results.Json(new
+        {
+            bindings.Generation,
+            bindings.ProfileId,
+            bindings.ProviderSessionId,
+            States = bindings.States.ToDictionary(
+                kv => kv.Key,
+                kv => kv.Value.ToString(),
+                StringComparer.OrdinalIgnoreCase),
+        }, JsonOptions);
+    }
+
+    private sealed record SetBindingStateRequest(string? AbilityAlias, string? State);
+
+    private static IResult SetBindingState(
+        [FromBody] SetBindingStateRequest request,
+        [FromServices] ActionCoordinator coordinator,
+        [FromServices] ControllerStateMachine stateMachine,
+        [FromServices] ILogger<Program> log)
+    {
+        if (string.IsNullOrWhiteSpace(request.AbilityAlias))
+            return Results.BadRequest(new { Error = "AbilityAlias is required." });
+
+        if (string.IsNullOrWhiteSpace(request.State)
+            || !Enum.TryParse<BindingVerificationState>(request.State, ignoreCase: true, out var state))
+        {
+            return Results.BadRequest(new { Error = "State must be Unverified, Verified, or Mismatch." });
+        }
+
+        // Binding calibration changes require disarmed controller (configuration lease).
+        using IDisposable? lease = stateMachine.TryBeginConfiguration();
+        if (lease is null)
+            return Results.Conflict(new { Error = "Disarm before changing binding verification state." });
+
+        coordinator.Bindings.SetState(request.AbilityAlias, state);
+        log.LogInformation("Binding {Alias} set to {State} via dashboard", request.AbilityAlias, state);
+        return Results.Ok(new
+        {
+            AbilityAlias = request.AbilityAlias,
+            State = state.ToString(),
+            Generation = coordinator.Bindings.Generation,
+        });
+    }
+
+    private static IResult GetAbilities([FromServices] SnapshotPublisher publisher)
+    {
+        TelemetryFrame frame = publisher.Latest;
+        var abilities = frame.Abilities
+            .OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(kv => new
+            {
+                Id = kv.Value.Id,
+                kv.Value.Name,
+                kv.Value.Available,
+                kv.Value.Usable,
+                kv.Value.InRange,
+                kv.Value.CooldownRemainingMilliseconds,
+                kv.Value.CooldownDurationMilliseconds,
+                kv.Value.CastTimeMilliseconds,
+                kv.Value.IsPassive,
+                kv.Value.IsReady,
+                NameKnown = !string.Equals(kv.Value.Name, kv.Value.Id, StringComparison.Ordinal),
+            })
+            .ToList();
+
+        return Results.Json(new
+        {
+            IsKnown = frame.IsAbilitiesKnown,
+            Count = abilities.Count,
+            ProviderHealth = frame.Provider.Health.ToString(),
+            frame.Provider.Sequence,
+            Abilities = abilities,
+        }, JsonOptions);
+    }
+
+    private static IResult GetActionBar([FromServices] SnapshotPublisher publisher)
+    {
+        TelemetryFrame frame = publisher.Latest;
+        return Results.Json(new
+        {
+            IsKnown = frame.IsActionBarKnown,
+            Page = frame.ActionBarPage,
+            Slots = (frame.ActionBarSlots ?? Array.Empty<ActionBarSlotState>())
+                .Select(s => new { s.Slot, s.AbilityId, HasAbility = !string.IsNullOrWhiteSpace(s.AbilityId) })
+                .ToList(),
+            Note = "Keys are not observable. Use slot→abilityId for calibration; bind keys in the profile yourself.",
+        }, JsonOptions);
+    }
+
+    /// <summary>
+    /// Write a disabled draft combat profile from the current live ability inventory.
+    /// Ability IDs come only from telemetry; keys stay empty for manual calibration.
+    /// Does not invent Warrior combat data.
+    /// </summary>
+    private static async Task<IResult> DraftProfileFromTelemetry(
+        [FromServices] SnapshotPublisher publisher,
+        [FromServices] ProfileService profileService,
+        [FromServices] ControllerStateMachine stateMachine,
+        [FromServices] ILogger<Program> log,
+        CancellationToken ct)
+    {
+        IDisposable? lease = stateMachine.TryBeginConfiguration();
+        if (lease is null)
+            return Results.Conflict(new { Error = "Disarm before creating draft profiles." });
+
+        using (lease)
+        {
+            TelemetryFrame frame = publisher.Latest;
+            DraftBuildResult? draft = DraftProfileBuilder.TryBuild(frame, out string? buildError);
+            if (draft is null)
+                return Results.BadRequest(new { Error = buildError ?? "Draft build failed." });
+
+            Directory.CreateDirectory(profileService.DirectoryPath);
+            string filePath = Path.Combine(profileService.DirectoryPath, $"{draft.ProfileId}.json");
+            string namesPath = Path.Combine(profileService.DirectoryPath, $"{draft.ProfileId}.names.json");
+            string tempPath = filePath + ".tmp";
+            await File.WriteAllTextAsync(tempPath, draft.ProfileJson, ct);
+            File.Move(tempPath, filePath, overwrite: true);
+            await File.WriteAllTextAsync(namesPath, draft.NamesJson, ct);
+
+            ProfileReloadResult reload = await profileService.ReloadAsync(ct);
+            if (!reload.Success)
+            {
+                return Results.BadRequest(new { Error = "Draft saved but reload failed.", reload.Errors });
+            }
+
+            log.LogInformation(
+                "Draft profile '{ProfileId}' created from live telemetry ({Count} abilities, player={Player})",
+                draft.ProfileId, draft.AbilityCount, frame.Player?.Name ?? "?");
+
+            return Results.Ok(new
+            {
+                Status = "drafted",
+                Id = draft.ProfileId,
+                Path = filePath,
+                NamesPath = namesPath,
+                AbilityCount = draft.AbilityCount,
+                Character = new { Calling = draft.Calling, Level = draft.Level },
+                Note = "Profile is disabled. Keys are empty unless suggested from action-bar slots (1–12 → 1–0,-,=). Confirm bindings before enabling — tool does not invent combat rotations.",
+                KeyHintsFromActionBar = draft.KeyHintsFromActionBar,
+            });
+        }
     }
 
     private static IResult GetProfiles([FromServices] ProfileService profileService)
@@ -352,6 +521,26 @@ public static class DashboardEndpoints
                 frame.Provider.ClientVersion,
                 frame.Provider.Fault,
                 frame.Provider.IsTruncated,
+            },
+            Knownness = new
+            {
+                Target = frame.TargetKnownness.ToString(),
+                frame.IsAbilitiesKnown,
+                frame.IsPlayerAurasKnown,
+                frame.IsTargetAurasKnown,
+                frame.GameInputReady,
+            },
+            AbilitySummary = new
+            {
+                IsKnown = frame.IsAbilitiesKnown,
+                Count = frame.Abilities.Count,
+                ReadyCount = frame.Abilities.Values.Count(a => a.IsReady),
+                // Cap for status payload size; full list is GET /api/abilities
+                Sample = frame.Abilities.Values
+                    .OrderBy(a => a.Id, StringComparer.OrdinalIgnoreCase)
+                    .Take(12)
+                    .Select(a => new { a.Id, a.Available, a.IsReady, Cd = a.CooldownRemainingMilliseconds })
+                    .ToList(),
             },
             Scanner = readerLoop is not null
                 ? new

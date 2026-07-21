@@ -1,10 +1,20 @@
 # BotDs Project Knowledge
 
+## RIFT addon path (durable — agents: never skip)
+
+- **Doc:** `docs/rift-local-paths.md`
+- **Code:** `BotDs.Core.RiftLocalPaths`
+- **Deploy:** `deploy-addon.cmd`
+- Player addons: `{Environment.SpecialFolder.MyDocuments}\RIFT\Interface\AddOns\`
+- This machine: `C:\Users\mrkoo\OneDrive\Documents\RIFT\Interface\AddOns\`
+- **Wrong:** non-OneDrive `Documents\RIFT\...`, Glyph `Live\Interface\Addons` as primary
+- Deploy is valid only if parent AddOns already has siblings (JAB, ReaderBridge, …)
+
 ## What This Is
 
 A personal, local combat-only bot for Gamigo's RIFT MMO on Windows x64. C# .NET 10 app that observes game state via a Lua addon → telemetry transport → memory reader, evaluates data-driven combat profiles, and sends foreground keyboard input via `SendInput`. Movement, pathfinding, navigation, target acquisition/switching are out of scope.
 
-**Status:** M0 (foundation) complete — 378 tests pass. M1 (transport decision gate) is active. No live observation or action output exists yet.
+**Status:** See `HANDOFF.md` / `ROADMAP.md` (M2/M8 code-complete with live residuals). Do not trust older test counts in this file.
 
 ## Project Layout
 
@@ -58,7 +68,7 @@ RIFT Inspect APIs → BotDsBridge Lua addon → Transport (M1 gate) → ITelemet
 
 ## Dashboard Auth
 
-Tokens set via env vars or user secrets under `BotDs:Dashboard:ApiToken` and `BotDs:Dashboard:ControlToken`. Control token grants read+mutation. Empty tokens fail closed. Tokens sent as `Authorization: Bearer <token>`; control endpoints also accept `X-Control-Token`. All API restricted to loopback.
+Dashboard API is **loopback-only with no token auth** (personal local tool). Non-loopback requests get 403.
 
 ## Profiles
 

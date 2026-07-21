@@ -9,7 +9,8 @@ Publisher-policy and account-enforcement references are retained as historical e
 ## Reading Order
 
 1. Read `../AGENTS.md` for binding scope and planning constraints.
-2. Read `rift-automation-history.md` for RIFT-specific historical and current evidence.
+2. Read `../docs/rift-local-paths.md` for **durable local RIFT paths** (OneDrive MyDocuments AddOns — do not invent deploy paths).
+3. Read `rift-automation-history.md` for RIFT-specific historical and current evidence.
 3. Read `rift-input-scripting.md` for AutoHotkey, HotkeyNet, multiboxing, and input-assistance history.
 4. Read `rift-addon-api-corpus.md` for the combat-relevant official-addon observation surface and its provenance limits.
 5. Read `architecture-evidence.md` for patterns found across RIFT and other PC MMO automation ecosystems.

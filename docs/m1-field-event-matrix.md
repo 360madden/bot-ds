@@ -22,9 +22,9 @@ This matrix records every RIFT addon API field consumed by BotDs telemetry. For 
 
 | Field | API Call | Expected Type | Observed Value | Nil Behavior | Secure-Mode | Confidence |
 |-------|----------|---------------|----------------|--------------|-------------|------------|
-| Frame time | `Inspect.Time.Frame()` | number (seconds) | _TBD_ | _TBD_ | Always available | — |
-| Client version | `Inspect.System.Version()` | string | _TBD_ | _TBD_ | _TBD_ | — |
-| Secure mode | `Inspect.System.Secure()` | boolean | _TBD_ | _TBD_ | Always true when active | — |
+| Frame time | `Inspect.Time.Frame()` | number (seconds) | Live: monotonic seconds; emitter stores `floor(t*1000)` as ProducerFrameMs | returns 0-ish early | Always available | High |
+| Client version | `Inspect.System.Version()` | **table** `{ build, external, internal }` | Live 2026-07-21: returns table (NOT string). `tostring(table)` yields unstable `table: 0x…` — bridge uses `.external` then build/internal | nil members possible | Available OOC | High |
+| Secure mode | `Inspect.System.Secure()` | boolean | Live: boolean via pcall; mapped to header flag 0x02 | false when not secure | Always true when active | Medium |
 
 ## 2. Unit State — Player
 
@@ -73,8 +73,14 @@ This matrix records every RIFT addon API field consumed by BotDs telemetry. For 
 
 | Field | API Call | Expected Type | Observed Value | Nil Behavior | Update Trigger | Confidence |
 |-------|----------|---------------|----------------|--------------|----------------|------------|
-| List count | `Inspect.Ability.New.List()` | table (array) | _TBD_ | nil if unavailable | Ability add/remove | — |
-| `id` | `Inspect.Ability.New.Detail(id)` | string | _TBD_ | — | — | — |
+| List count | `Inspect.Ability.New.List()` | table (array/dict) | Live: 55+ ids (2026-07-21) | nil if unavailable | Ability add/remove | High |
+| `id` | `Inspect.Ability.New.Detail(id)` | string | Live opaque `A…` tokens | — | — | High |
+| `name` | same | string | Live: present on Detail; bridge schema v2 publishes | empty | — | High |
+| `unusable` | same | boolean/nil | Primary usability signal (not `usable` member) | nil = treat usable | — | High |
+| `currentCooldownRemaining` | same | number **seconds** | Bridge converts ×1000 → ms on wire | nil → −1 | CD begin/end | High |
+| `currentCooldownDuration` / `cooldown` | same | number **seconds** | Same conversion | nil → −1 | — | High |
+| `castingTime` | same | number **seconds** | Same conversion | nil → −1 | — | Medium |
+| `passive` / `channeled` / `outOfRange` | same | boolean | Flags bits 3/4/2 | — | — | High |
 | `name` | same | string | _TBD_ | — | — | — |
 | `castingTime` | same | number | _TBD_ | nil if instant | — | — |
 | `channeled` | same | boolean | _TBD_ | false | — | — |
@@ -124,9 +130,9 @@ This matrix records every RIFT addon API field consumed by BotDs telemetry. For 
 
 | Field | API Call | Expected Type | Observed Value | Nil Behavior | Update Trigger | Confidence |
 |-------|----------|---------------|----------------|--------------|----------------|------------|
-| Current page | `Action.Bar.Page.Get()` | number | _TBD_ | TBD | Page change | — |
-| Slot N type | `Action.Get(N)` | string ("ability"/"macro"/nil) | _TBD_ | nil = empty slot | Bar change | — |
-| Slot N ability ID | `Action.Get(N).id` | string | _TBD_ | nil = not an ability | Bar change | — |
+| Current page | `Action.Bar.Page.Get()` | number | Published in V5 ActionBar section (schema v2 bridge) | 0 default | Page change | Medium |
+| Slot N type | `Action.Get(N)` | table/type | Live probe: `type` + `id`; ability slots published | nil = empty | Bar change | Medium |
+| Slot N ability ID | `Action.Get(N).id` | string | Published as slot→id (keys still user-configured) | empty string | Bar change | Medium |
 
 **Finding**: Key bindings to action-bar slots are NOT observable. `Command.Bind` exists but the API does not expose a query for existing bindings. Therefore: action-bar/key mappings must be **user-configured in profiles** and verified via controlled calibration.
 

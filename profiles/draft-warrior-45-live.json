@@ -1,0 +1,350 @@
+{
+  "profileVersion": 1,
+  "enabled": false,
+  "id": "draft-warrior-45-live",
+  "character": {
+    "calling": "Warrior",
+    "minimumLevel": 45,
+    "maximumLevel": 45
+  },
+  "abilities": {
+    "a01bb8c035b6a96dd": {
+      "abilityId": "A01BB8C035B6A96DD",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a03f53003a62ffd1e": {
+      "abilityId": "A03F53003A62FFD1E",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a05213a7d60b13f6b": {
+      "abilityId": "A05213A7D60B13F6B",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a05e934712deb9b9f": {
+      "abilityId": "A05E934712DEB9B9F",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a0cb1772899b72707": {
+      "abilityId": "A0CB1772899B72707",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a0cde363aa305a3b5": {
+      "abilityId": "A0CDE363AA305A3B5",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a0d674ea083dc58f6": {
+      "abilityId": "A0D674EA083DC58F6",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a132f106ff887f85c": {
+      "abilityId": "A132F106FF887F85C",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a162d4584a3a058f0": {
+      "abilityId": "A162D4584A3A058F0",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a1672c336aaf86543": {
+      "abilityId": "A1672C336AAF86543",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a228a2340a139a1e0": {
+      "abilityId": "A228A2340A139A1E0",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a23a6e91642edea34": {
+      "abilityId": "A23A6E91642EDEA34",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a250e73987922ca1b": {
+      "abilityId": "A250E73987922CA1B",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a251f2e341bed68a3": {
+      "abilityId": "A251F2E341BED68A3",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a295eeca15addae79": {
+      "abilityId": "A295EECA15ADDAE79",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a2b3964a98de82d41": {
+      "abilityId": "A2B3964A98DE82D41",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a2cd5149a46ee1393": {
+      "abilityId": "A2CD5149A46EE1393",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a2de2d8448bf4b909": {
+      "abilityId": "A2DE2D8448BF4B909",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a2debc0f3eab4aa48": {
+      "abilityId": "A2DEBC0F3EAB4AA48",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a2f23b7da3b6fe174": {
+      "abilityId": "A2F23B7DA3B6FE174",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a308169131fd954ce": {
+      "abilityId": "A308169131FD954CE",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a33611d5d1ef5312e": {
+      "abilityId": "A33611D5D1EF5312E",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a338ecd701dcd52c0": {
+      "abilityId": "A338ECD701DCD52C0",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a35b3f73e433f3e42": {
+      "abilityId": "A35B3F73E433F3E42",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a361efbf01cd99af9": {
+      "abilityId": "A361EFBF01CD99AF9",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a387ec2995d3b2ce3": {
+      "abilityId": "A387EC2995D3B2CE3",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a388ac2a3092b4db9": {
+      "abilityId": "A388AC2A3092B4DB9",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a38dfcb8220ee4a2d": {
+      "abilityId": "A38DFCB8220EE4A2D",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a3c5aec64d3793518": {
+      "abilityId": "A3C5AEC64D3793518",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a4bf7436b593c9847": {
+      "abilityId": "A4BF7436B593C9847",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a505aaa9b6eb8673d": {
+      "abilityId": "A505AAA9B6EB8673D",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a547d021a5733d563": {
+      "abilityId": "A547D021A5733D563",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a5ae12f27ae833543": {
+      "abilityId": "A5AE12F27AE833543",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a5bf74a176be8056a": {
+      "abilityId": "A5BF74A176BE8056A",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a65319a6c5a45d8a8": {
+      "abilityId": "A65319A6C5A45D8A8",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a661611602a6d2082": {
+      "abilityId": "A661611602A6D2082",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a6663bae96c8e85e6": {
+      "abilityId": "A6663BAE96C8E85E6",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a6713997d6cff894c": {
+      "abilityId": "A6713997D6CFF894C",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a6acafc287cf516b9": {
+      "abilityId": "A6ACAFC287CF516B9",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a6b82caaccd1a03d8": {
+      "abilityId": "A6B82CAACCD1A03D8",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a6b8b16cd6f8b3db9": {
+      "abilityId": "A6B8B16CD6F8B3DB9",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a6f1d01307cf516b9": {
+      "abilityId": "A6F1D01307CF516B9",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a6f854a06833ade2e": {
+      "abilityId": "A6F854A06833ADE2E",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a75309c536cdde89c": {
+      "abilityId": "A75309C536CDDE89C",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a768776d17cf516b9": {
+      "abilityId": "A768776D17CF516B9",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "a7c9dd2ea3fed172d": {
+      "abilityId": "A7C9DD2EA3FED172D",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "afa2841bf792fce2c": {
+      "abilityId": "AFA2841BF792FCE2C",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "afc39b1afbc3b8551": {
+      "abilityId": "AFC39B1AFBC3B8551",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "afd2ef2bb715efd36": {
+      "abilityId": "AFD2EF2BB715EFD36",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "afdfa0334a0189a9f": {
+      "abilityId": "AFDFA0334A0189A9F",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "afe4d68816c2bd068": {
+      "abilityId": "AFE4D68816C2BD068",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "afe8a4fd3871425bb": {
+      "abilityId": "AFE8A4FD3871425BB",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "aff0c976c5b694f38": {
+      "abilityId": "AFF0C976C5B694F38",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "aff10fe38281e01d2": {
+      "abilityId": "AFF10FE38281E01D2",
+      "key": "",
+      "enabled": false,
+      "required": false
+    },
+    "affa07df4b14e6c15": {
+      "abilityId": "AFFA07DF4B14E6C15",
+      "key": "",
+      "enabled": false,
+      "required": false
+    }
+  },
+  "rules": [
+    {
+      "id": "disabled-placeholder",
+      "ability": "a01bb8c035b6a96dd",
+      "enabled": false,
+      "when": {}
+    }
+  ]
+}

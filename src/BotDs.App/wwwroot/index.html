@@ -14,19 +14,6 @@
       <h1 class="top-bar__title">BotDs</h1>
       <span class="top-bar__subtitle" id="conn-label">Disconnected</span>
     </div>
-    <form class="token-form" id="token-form" role="search" aria-label="Authorization token">
-      <label for="token-input" class="sr-only">Bearer Token</label>
-      <input
-        id="token-input"
-        class="token-input"
-        type="password"
-        placeholder="Bearer token…"
-        autocomplete="off"
-        spellcheck="false"
-      />
-      <button type="submit" class="btn btn--sm">Set</button>
-      <button type="button" class="btn btn--sm btn--ghost" id="token-clear" aria-label="Clear token">Clear</button>
-    </form>
   </header>
 
   <main id="main" class="dashboard" role="main">
@@ -243,6 +230,52 @@
         </div>
       </div>
       <p class="unit-cast" id="target-cast" hidden>Casting: <span id="target-cast-text"></span></p>
+    </section>
+
+    <section class="card card--abilities" id="abilities-section" aria-labelledby="abilities-heading">
+      <h2 id="abilities-heading" class="card__title">Abilities</h2>
+      <p class="card__hint" id="abilities-summary">Waiting for inventory…</p>
+      <div class="table-wrap">
+        <table class="data-table" id="abilities-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Id</th>
+              <th>Avail</th>
+              <th>Usable</th>
+              <th>CD</th>
+              <th>Ready</th>
+            </tr>
+          </thead>
+          <tbody id="abilities-body">
+            <tr><td colspan="6" class="data-table__empty">No ability data</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card__actions">
+        <button type="button" class="btn btn--sm" id="btn-refresh-abilities">Refresh</button>
+        <button type="button" class="btn btn--sm" id="btn-draft-profile">Draft profile from live</button>
+        <span class="mono" id="abilities-status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="card card--action-bar" id="action-bar-section" aria-labelledby="action-bar-heading">
+      <h2 id="action-bar-heading" class="card__title">Action bar</h2>
+      <p class="card__hint" id="action-bar-summary">Keys are not observed — slots show ability ids for calibration.</p>
+      <div class="table-wrap">
+        <table class="data-table" id="action-bar-table">
+          <thead>
+            <tr>
+              <th>Slot</th>
+              <th>Suggested key</th>
+              <th>Ability</th>
+            </tr>
+          </thead>
+          <tbody id="action-bar-body">
+            <tr><td colspan="3" class="data-table__empty">No bar data</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
 
     <section class="card card--sequence" aria-labelledby="sequence-heading">
