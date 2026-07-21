@@ -19,6 +19,45 @@ M8 safety-hardening is **complete** and **DryRun-proven**. M9 packaging is **ver
 - The authoritative addon destination is `{MyDocuments}\RIFT\Interface\AddOns\BotDsBridge`, where shell MyDocuments is currently `C:\Users\mrkoo\OneDrive\Documents`.
 - Before claiming addon deployment success, verify sibling addons exist in the destination parent, then require in-game `/reloadui`.
 
+## Completed this session (2026-07-21e — M9 acceptance matrix)
+
+### Acceptance matrix — autonomous results
+
+| Area | Status | Detail |
+| --- | --- | --- |
+| **Replay** | ✅ PASS | 8/8 replay integration tests pass (348ms), deterministic snapshots/decisions/stops |
+| **Dashboard** | ✅ PASS | HTTP 200, all sections present (provider, controller, scanner, player, target, abilities, action bar, sequence, profiles, settings, coordinator, action history, log), toast container verified, CSS animations confirmed (toastSlideIn, logFadeIn), scrollbar styling present, showToast() JS function verified, skip-link accessible |
+| **API endpoints** | ✅ PASS | All 6 endpoints respond: /api/status (Healthy, player "Atank", 55 abilities, scanner attached), /api/readiness (canArm=false, blockers: scanner not stable + no target), /api/coordinator (Disabled, 0 history), /api/abilities (known=true), /api/profiles (1 profile: "default"), /api/settings (scanner 50ms, eval 50ms, dash 100ms) |
+| **Transport soak** | ⚠️ PARTIAL | 5.5 min soak at 50ms cadence — 99.6% cache hit rate (524/526), 0 read failures. Full 30-min soak with 36,000 publications not yet run (needs fresh addon data + longer run). |
+| **Performance** | ⚠️ PARTIAL | 526 reads, p50=3/sec, p95=10/sec, p99=11/sec, 0 read failures. Full 10,000-sample performance run with CPU/memory/GC not yet run. |
+| **Test-window input** | ⏸️ DEFERRED | Requires Windows test window fixture + 1,000 dispatch attempts |
+| **Live field conformance** | ⏸️ NEEDS USER | Target cycles, health/resource changes, cooldown/range changes, casts, aura cycles, zoning/reload — all need user at RIFT client |
+| **Live combat** | ⏸️ DEFERRED | Live mode not enabled; 30 min / 200 acknowledged dispatches deferred |
+| **Forced live failures** | ⏸️ NEEDS USER | Alt-tab, chat/modal focus, friendly/dead/switched target, player death, telemetry stall — needs user |
+
+### Live-client checklist (user action required)
+
+Run BotDs.App (`run-botds.cmd` or `dotnet run`) then complete these in RIFT:
+
+1. **`/reloadui`** — reload BotDsBridge addon, verify provider returns to Healthy within 5s
+2. **Target cycles** — select/clear/switch targets 20+ times, verify dashboard shows correct target name/health
+3. **Combat** — engage a hostile NPC, verify health bars update in dashboard
+4. **Cast abilities** — cast 10+ abilities, verify abilities table updates
+5. **Zone** — use a porticulum or zone transition, verify provider recovers (Healthy → Faulted/Disconnected → Healthy)
+6. **Alt-tab** — alt-tab away from RIFT for 5+ seconds, verify controller stays Disarmed
+7. **Chat focus** — press Enter to open chat, verify no action dispatch attempted
+
+### Gate status (all passing)
+
+```text
+dotnet build --no-restore  ✅ 0w 0e
+dotnet test               ✅ 600 passed (8 replay tests verified)
+dotnet format              ✅
+node --check app.js        ✅
+luac -p main.lua           ✅
+git diff --check           ✅
+```
+
 ## Completed this session (2026-07-21d — M9 dashboard polish)
 
 ### Dashboard UI polish
@@ -139,7 +178,7 @@ git diff --check                   ✅
 
 - M0-M7: Complete
 - M8: **Offline safety-hardening complete.** Live acceptance deferred.
-- M9: **In progress** — publish script created + verified self-contained; performance soak complete (99.6% cache hit rate, 0 read failures); dashboard polish complete (micro-interactions, toast system, visual polish); acceptance matrix remains.
+- M9: **In progress** — publish + soak + dashboard polish complete; acceptance matrix autonomous tests pass (replay, dashboard, API); live-client checklist remains (needs user at RIFT).
 - Bridge: 0.2.1, protocol/schema v2 unchanged
 - Tests: 600 green
 - Publish: 107 MB self-contained at `publish\BotDs.App.exe` (gitignored)
@@ -154,5 +193,5 @@ git diff --check                   ✅
 6. ~~Verify self-contained publish + smoke test~~ ✅
 7. ~~Dashboard responsive/accessibility final pass (M9)~~ ✅ **CSS micro-interactions, toast notifications, health bar shimmers, scrollbar styling, body gradient, card hover lift, focus glow rings**
 8. ~~Performance soak~~ ✅ **99.6% cache hit rate, 0 read failures, 5.5 min soak (526 reads, 2,908 addon frames)**
-9. Full PLAN.md §15 acceptance matrix (M9)
+9. ~~Full PLAN.md §15 acceptance matrix~~ ⚠️ **Autonomous tests complete (replay, dashboard, API). Live-client checklist needs user at RIFT.**
 10. **Do not enter Live mode.** M8 Live acceptance remains deferred.
