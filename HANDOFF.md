@@ -1,6 +1,6 @@
 # BotDs Implementation Handoff
 
-Last updated: **2026-07-21** (M8 offline safety-hardening **complete** + **DryRun proof passed**; 600 tests green; all gates passing)
+Last updated: **2026-07-21** (M8 offline safety-hardening **complete** + **DryRun proof passed** + **deep bug hunt: 0 critical issues**; 600 tests green; all gates passing)
 
 **Repo:** `C:\work\bot-ds`
 
@@ -89,9 +89,8 @@ git diff --check                   ✅
 
 ## Remaining work
 
-1. ~~Deploy bridge 0.2.1~~ ✅ (verified TOC v0.2.1, sibling addons JAB/ReaderBridge present)
+1. ~~Deploy bridge 0.2.1~~ ✅
 2. ~~Verify sibling addons~~ ✅
-3. ~~In-game `/reloadui` → confirm "BotDs Bridge v0.2.1" chat message~~ ✅ (user confirmed RIFT running)
-4. ~~DryRun-only proof~~ ✅ **PASSED 2026-07-21**: Healthy telemetry (player "Atank" L45, target present), coordinator Disabled with `PendingAction=null`, `InputSink` and `LiveBlockers` payloads present and correct
+3. ~~DryRun-only proof~~ ✅
+4. ~~Deep bug hunt~~ ✅ **0 critical bugs found.** Full-stack sweep: concurrency, null safety, resource management, exception handling, state machines — all clear. One benign race noted (non-atomic reset of log-throttling counter).
 5. **Do not enter Live mode.** M8 Live acceptance remains deferred.
-6. Push commits to GitHub.
