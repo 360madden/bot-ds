@@ -1,6 +1,6 @@
 # BotDs Implementation Handoff
 
-Last updated: **2026-07-21** (M9 packaging begun — `publish-botds.cmd` created, all 7 gates green, **600 tests**, live telemetry **re-verified** against RIFT PID 33140)
+Last updated: **2026-07-21** (M9 packaging — `publish-botds.cmd` **verified self-contained**, BotDs.App.exe smoke-tested, all 7 gates green, **600 tests**)
 
 **Repo:** `C:\work\bot-ds`
 
@@ -8,7 +8,7 @@ Last updated: **2026-07-21** (M9 packaging begun — `publish-botds.cmd` created
 
 ## Resume in one paragraph
 
-M8 safety-hardening is **complete** and **DryRun-proven**. M9 packaging is underway: `publish-botds.cmd` provides one-step `dotnet publish -c Release -r win-x64 --self-contained` → `publish\BotDs.App.exe`, the existing `run-botds.cmd --publish` launcher covers runtime. Live telemetry re-verified against RIFT PID 33140: Healthy provider, player "Atank" L45 Warrior with 55 abilities, cache-hit scanner at 50ms cadence, coordinator Disabled with correct InputSink/LiveBlockers payloads. **600 tests green, all 7 gates pass.** DryRun is log-only. Live supports Cast/Cooldown acknowledgements only. Stop before Live mode.
+M8 safety-hardening is **complete** and **DryRun-proven**. M9 packaging is **verified**: `publish-botds.cmd` produces a self-contained 107 MB `publish\BotDs.App.exe` (361 files, coreclr.dll confirmed, .NET 10.0.8 runtime bundled). The published binary was smoke-tested — starts, binds port 5068 (via `ASPNETCORE_URLS`), serves HTTP 200, `/api/status` and `/api/coordinator` respond correctly. `run-botds.cmd --publish` covers runtime. The `--self-contained true` batch-line-continuation bug was fixed (`-p:SelfContained=true`). Live telemetry re-verified: RIFT PID 33140, Healthy, 55 abilities, cache-hit scanner. **600 tests green, all 7 gates pass.** DryRun is log-only. Stop before Live mode.
 
 ## Safety boundaries
 
@@ -19,53 +19,28 @@ M8 safety-hardening is **complete** and **DryRun-proven**. M9 packaging is under
 - The authoritative addon destination is `{MyDocuments}\RIFT\Interface\AddOns\BotDsBridge`, where shell MyDocuments is currently `C:\Users\mrkoo\OneDrive\Documents`.
 - Before claiming addon deployment success, verify sibling addons exist in the destination parent, then require in-game `/reloadui`.
 
-## Completed this session
+## Completed this session (2026-07-21b — M9 publish verification)
 
-### HANDOFF review points (all resolved)
+### Publish verification
 
-1. **Reviewed `TryValidateLiveDispatchLocked` and Live blocker aggregation** — no redundant or missing stop classifications found. The two methods (`BuildLiveModeBlockersLocked` and `TryValidateLiveDispatchLocked`) are well-aligned: emergency hotkey registration and profile-key collision are checked at arm time (in blockers), while dispatch-time revalidation (in fence) checks the conditions that can change mid-combat.
+- **Created `publish-botds.cmd`** — one-step `dotnet publish -c Release -r win-x64 -p:SelfContained=true`
+- **Fixed self-contained bug** — `--self-contained true` with `^` line continuations was silently dropped by batch parsing, producing a framework-dependent 1.4 MB publish instead of self-contained. Fixed to `-p:SelfContained=true` on a single line.
+- **Smoke-tested published binary** — `BotDs.App.exe` starts, binds port 5068 (via `ASPNETCORE_URLS`), serves HTTP 200 dashboard, `/api/status` and `/api/coordinator` respond correctly
+- **Publish stats**: 107 MB, 361 files, `coreclr.dll` present (self-contained confirmed), .NET 10.0.8 runtime bundled
+- **Live telemetry re-verified**: RIFT PID 33140, Healthy provider, 55 abilities, cache-hit scanner at 50ms cadence
+- **Launcher**: `run-botds.cmd --publish` already handles `ASPNETCORE_URLS` and runtime env
+- **Docs updated**: ROADMAP.md M9→In Progress, first-run.md references `publish-botds.cmd`, HANDOFF checkpoint
 
-2. **Confirmed `SnapshotAssembler` PID assertion** — `AttachmentProcessId` is already propagated from `ScannerReadResult.AttachmentPid` at line 71 of `SnapshotAssembler.cs`. Added a targeted unit test verifying the propagation and a second test confirming the PID is set even on fault frames while game state is cleared.
+### Gate status (all passing)
 
-3. **Added cleanup result logging** — `WindowsKeySink.SendKeyChord` now logs cleanup injection results in all three failure paths (partial key-down, cancellation, partial key-up). Cleanup behavior is **not weakened** — all cleanup calls still execute, and the method still returns `false` (latching the fault). Required adding `Microsoft.Extensions.Logging.Abstractions` package reference to `BotDs.Input.csproj` and an optional `ILogger<WindowsKeySink>?` constructor parameter.
-
-### New tests added (4 tests, 596 → 600)
-
-- `SnapshotAssemblerTests.Scanner_attachment_pid_propagates_to_assembled_frame_provider` — verifies `AttachmentProcessId` flows from scanner result to assembled frame
-- `SnapshotAssemblerTests.Faulted_frame_with_pid_does_not_preserve_previous_game_state` — verifies PID is still set on fault frames while game state is cleared
-- `ActionCoordinatorTests.InputSink_and_live_blockers_exposed_in_coordinator_snapshot` — verifies `InputSinkStatus` fields, Live blockers lifecycle (unverified → verified → PID mismatch)
-- `ActionCoordinatorTests.Coordinator_snapshot_reflects_emergency_hotkey_state` — verifies emergency hotkey binding, registration, and error state
-
-### Formatting
-
-`dotnet format` applied to the 4 files with known whitespace debt:
-- `src/BotDs.Input/VirtualKeyMap.cs`
-- `src/BotDs.Input/WindowsKeySink.cs`
-- `tests/BotDs.Tests/CallingAgnosticTests.cs`
-- `tests/BotDs.Tests/ReplayIntegrationTests.cs`
-
-### Documentation reconciled
-
-- **PLAN.md** — status line updated: M2-M8 code-complete, M9 planned; date bumped to 2026-07-21
-- **ROADMAP.md** — test count updated (537 → 600); date bumped to 2026-07-21
-- **docs/first-run.md** — bridge version updated (0.2.0 → 0.2.1)
-- **PROTOCOL.md** — no changes needed (wire spec unchanged; schema v2)
-- **HANDOFF.md** — rewritten as this checkpoint
-
-## Files changed this session
-
-- `src/BotDs.Input/BotDs.Input.csproj` — added `Microsoft.Extensions.Logging.Abstractions` package reference
-- `src/BotDs.Input/WindowsKeySink.cs` — cleanup result logging + optional `ILogger<WindowsKeySink>?` parameter + format
-- `src/BotDs.App/Program.cs` — wire `ILogger<WindowsKeySink>` into `WindowsKeySink` via DI factory
-- `tests/BotDs.Tests/SnapshotAssemblerTests.cs` — 2 new PID propagation tests
-- `tests/BotDs.Tests/ActionCoordinatorTests.cs` — 2 new coordinator payload tests
-- `src/BotDs.Input/VirtualKeyMap.cs` — format only
-- `tests/BotDs.Tests/CallingAgnosticTests.cs` — format only
-- `tests/BotDs.Tests/ReplayIntegrationTests.cs` — format only
-- `PLAN.md` — status line update
-- `ROADMAP.md` — test count + date update
-- `docs/first-run.md` — bridge version update
-- `HANDOFF.md` — rewritten
+```text
+dotnet build --no-restore  ✅ 0w 0e
+dotnet test               ✅ 600 passed
+dotnet format              ✅
+node --check app.js        ✅
+luac -p main.lua           ✅
+git diff --check           ✅
+```
 
 ## Current gate status (all passing)
 
@@ -83,9 +58,10 @@ git diff --check                   ✅
 
 - M0-M7: Complete
 - M8: **Offline safety-hardening complete.** Live acceptance deferred.
-- M9: **In progress** — `publish-botds.cmd` created; dashboard, docs, performance soak, acceptance matrix remain.
+- M9: **In progress** — publish script created + verified self-contained; dashboard polish, performance soak, acceptance matrix remain.
 - Bridge: 0.2.1, protocol/schema v2 unchanged
 - Tests: 600 green
+- Publish: 107 MB self-contained at `publish\BotDs.App.exe` (gitignored)
 
 ## Remaining work
 
@@ -94,7 +70,8 @@ git diff --check                   ✅
 3. ~~DryRun-only proof~~ ✅
 4. ~~Deep bug hunt~~ ✅ **0 critical bugs found.**
 5. ~~Create publish-botds.cmd~~ ✅
-6. Dashboard responsive/accessibility final pass (M9)
-7. Performance soak: 10,000-sample procedure with p50/p95/p99/max metrics (M9)
-8. Full PLAN.md §15 acceptance matrix (M9)
-9. **Do not enter Live mode.** M8 Live acceptance remains deferred.
+6. ~~Verify self-contained publish + smoke test~~ ✅
+7. Dashboard responsive/accessibility final pass (M9)
+8. Performance soak: 10,000-sample procedure with p50/p95/p99/max metrics (M9)
+9. Full PLAN.md §15 acceptance matrix (M9)
+10. **Do not enter Live mode.** M8 Live acceptance remains deferred.
