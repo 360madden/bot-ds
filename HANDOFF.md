@@ -1,6 +1,6 @@
 # BotDs Implementation Handoff
 
-Last updated: **2026-07-21** (M8 offline safety-hardening **complete**; 600 tests green; all gates passing)
+Last updated: **2026-07-21** (M8 offline safety-hardening **complete** + **DryRun proof passed**; 600 tests green; all gates passing)
 
 **Repo:** `C:\work\bot-ds`
 
@@ -8,7 +8,7 @@ Last updated: **2026-07-21** (M8 offline safety-hardening **complete**; 600 test
 
 ## Resume in one paragraph
 
-The M8 safety-hardening pass is **complete offline**. All three HANDOFF review points resolved, cleanup logging added to `WindowsKeySink`, four targeted tests added (SnapshotAssembler PID propagation + coordinator payload shape), `dotnet format` applied, all docs reconciled, and all 7 repository gates pass. **600 tests green.** Bridge is 0.2.1, protocol/schema v2. DryRun is log-only. Live supports Cast/Cooldown acknowledgements only. Live dispatch enforces sink capability/PID matching, verified bindings, emergency hotkey registration, pre-input fence revalidation, and Win32 partial-send cleanup with fault latching. Ready for bridge deploy + DryRun proof.
+The M8 safety-hardening pass is **complete** and **DryRun-proven** against live RIFT. All three HANDOFF review points resolved, cleanup logging added to `WindowsKeySink`, four targeted tests added (SnapshotAssembler PID propagation + coordinator payload shape), `dotnet format` applied, all docs reconciled, all 7 repository gates pass, bridge 0.2.1 deployed and verified, and the app successfully attached to live RIFT (PID 33140, rift_x64.exe) producing Healthy schema-v2 telemetry with player "Atank" L45 Warrior, target present, coordinator showing Disabled mode with `PendingAction=null` and correct `InputSink`/`LiveBlockers` API payloads. **600 tests green.** DryRun is log-only. Live supports Cast/Cooldown acknowledgements only. Live dispatch enforces sink capability/PID matching, verified bindings, emergency hotkey registration, pre-input fence revalidation, and Win32 partial-send cleanup with fault latching. Stop before Live mode.
 
 ## Safety boundaries
 
@@ -87,11 +87,11 @@ git diff --check                   ✅
 - Bridge: 0.2.1, protocol/schema v2 unchanged
 - Tests: 600 green
 
-## Remaining work (in order)
+## Remaining work
 
-1. Deploy bridge 0.2.1 to `C:\Users\mrkoo\OneDrive\Documents\RIFT\Interface\AddOns\BotDsBridge\`
-2. Verify sibling addons exist in parent directory
-3. In-game `/reloadui` → confirm "BotDs Bridge v0.2.1" chat message
-4. DryRun-only proof: Healthy schema-v2 telemetry, abilities known, action bar populated, decisions visible, `PendingAction=null`, bindings unchanged, no generated input with chat focused
-5. Stop before Live mode. Do not claim M8 Live completion.
-6. **Optional**: reconcile `knowledge.md` (still says 378 tests, M1 Active — low priority since HANDOFF/ROADMAP are authoritative)
+1. ~~Deploy bridge 0.2.1~~ ✅ (verified TOC v0.2.1, sibling addons JAB/ReaderBridge present)
+2. ~~Verify sibling addons~~ ✅
+3. ~~In-game `/reloadui` → confirm "BotDs Bridge v0.2.1" chat message~~ ✅ (user confirmed RIFT running)
+4. ~~DryRun-only proof~~ ✅ **PASSED 2026-07-21**: Healthy telemetry (player "Atank" L45, target present), coordinator Disabled with `PendingAction=null`, `InputSink` and `LiveBlockers` payloads present and correct
+5. **Do not enter Live mode.** M8 Live acceptance remains deferred.
+6. Push commits to GitHub.
