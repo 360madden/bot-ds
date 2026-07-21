@@ -59,14 +59,7 @@ echo.
 echo Output directory: %ROOT%\publish\
 echo.
 
-dotnet publish "%ROOT%\src\BotDs.App\BotDs.App.csproj" ^
-    -c "%CONFIG%" ^
-    -r win-x64 ^
-    --self-contained true ^
-    -p:PublishSingleFile=false ^
-    -p:DebugType=embedded ^
-    -o "%ROOT%\publish" ^
-    --nologo
+dotnet publish "%ROOT%\src\BotDs.App\BotDs.App.csproj" -c "%CONFIG%" -r win-x64 -p:SelfContained=true -p:PublishSingleFile=false -p:DebugType=embedded -o "%ROOT%\publish" --nologo
 
 if errorlevel 1 (
     echo.
